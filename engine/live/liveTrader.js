@@ -15,6 +15,7 @@ import { Portal } from './portal.js';
 import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
+import { GweiTrade } from './gwei.js';
 import * as latency from './latency.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -27,6 +28,7 @@ export class LiveTrader extends EventEmitter {
     setApprovalCtx({ trader: this, market });
     this.gangTrade = new GangTrade(market.provider, (o) => this.portal.send(o));
     this.gangV2 = new GangV2(market.provider, (o) => this.portal.send(o));
+    this.gweiTrade = new GweiTrade(market.provider, (o) => this.portal.send(o));
     this.wallets = [];
     this.positions = new Map();
     this.orders = [];
@@ -332,12 +334,16 @@ export class LiveTrader extends EventEmitter {
 
   useOpenFour(t) { return t.source === 'four-agent' && t.stage === 'curve'; }
 
+  // GWEI 曲线阶段直接调代币合约 buy / sell；迁移后走 baw market-order（PancakeSwap）
+  useGwei(t) { return t.source === 'gwei' && t.stage === 'curve'; }
+
   usePortal(t, side) { return t.source === 'agent-curve' && t.market && t.stage === 'curve' && (side === 'buy' || !DRY_RUN); }
 
   route(t, side) {
     if (this.useGang(t)) return `Gang 内盘 · ${side === 'buy' ? 'buy' : 'sell'}（BNB，一笔完成）· baw contract-call（每个钱包最多买总量 1%）`;
     if (this.useGangV2(t)) return side === 'buy' ? `Gang V2 内盘 · BNB→${t.quote}→buy（非原子，2～3 笔交易）· 每个钱包最多 1%` : `Gang V2 内盘 · sell→${t.quote}→BNB（非原子，2～3 笔交易）`;
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
+    if (this.useGwei(t)) return `GWEI 曲线 · ${side}（BNB，一笔完成，卖出不用授权）· baw contract-call（单笔最多 0.1 BNB，每个钱包最多总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
     if (this.usePortal(t, side)) return `Flap Agent Curve · ${t.quote === 'BNB' ? 'Portal.buy（BNB，原子）' : `BNB→${t.quote}→Portal.buyWithQuote（非原子）`}`;
     return `币安 Web3 DEX 聚合 · baw market-order ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}${t.platform === 'four' ? '（可能打不到内盘）' : ''}`;
@@ -405,6 +411,19 @@ export class LiveTrader extends EventEmitter {
           const q = await this.gangTrade.quoteSell(t.address, amt);
           v = { ...base, amountIn: Number(amt) / 1e18, out: q.out, minOut: q.out * (1 - slippage / 100), feeBnb: q.feeBnb, feePct: null };
         }
+      } else if (this.useGwei(t)) {
+        if (side === 'buy') {
+          const q = await this.gweiTrade.quoteBuy(trim(Math.min(0.1, Number(amount))));
+          const room = await this.gweiTrade.walletRoom(w.address);
+          v = { ...base, amountIn: +amount, out: q.out, minOut: q.out * (1 - slippage / 100), feeBnb: q.feeBnb, feePct: 0.1,
+            note: Number(amount) > 0.1 ? 'GWEI 单笔最多 0.1 BNB，按 0.1 报价' : q.out > room ? `超过单钱包 1% 上限，还能买 ${room.toFixed(0)} 个` : q.refund > 0n ? `这笔会迁移曲线，多余的 ${q.refundBnb} BNB 同笔退回` : null };
+        } else {
+          const bal = await this.gweiTrade.balance(w.address);
+          const amt = (bal * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
+          if (amt <= 0n) return { ...base, note: '没有可卖出的余额' };
+          const q = await this.gweiTrade.quoteSell(amt);
+          v = { ...base, amountIn: Number(amt) / 1e18, out: q.out, minOut: q.out * (1 - slippage / 100), feeBnb: q.feeBnb, feePct: 0.1, note: '同一个区块买了不能卖，刚买完等几秒' };
+        }
       } else if (this.useOpenFour(t)) {
         // 官方脚本报价（含 1% 持仓上限、链上模拟）
         const bps = Math.round(slippage * 100);
@@ -456,10 +475,19 @@ export class LiveTrader extends EventEmitter {
         let r;
         if (side === 'buy' && t.source === 'agent-curve' && t.market && t.stage === 'curve') {
           r = await this.portal.previewBuy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, amountBnb: trim(amt), slippage, step });
+        } else if (this.useGwei(t)) {
+          const q = await this.gweiTrade.quoteBuy(trim(Math.min(0.1, amt))); step(`GWEI quoteBuy ${q.out.toFixed(0)} 个（只报价）`, 0);
+          r = { venue: 'GWEI 曲线 buy（只报价）', expected: q.out };
         } else {
           r = await this.swap({ w, from: BNB_NATIVE, to: t.address, qty: amt, slippage, step });
         }
         return this.finish(order, r, null, { amountIn: amt, out: r.expected });
+      }
+      if (this.useGwei(t)) {
+        const bal = await this.gweiTrade.balance(w.address); const amt = (bal * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
+        if (amt <= 0n) throw new Error('没有可卖出的余额');
+        const q = await this.gweiTrade.quoteSell(amt); step(`GWEI quoteSell ${q.out} BNB（只报价）`, 0);
+        return this.finish(order, { venue: 'GWEI 曲线 sell（只报价）', expected: q.out }, null, { amountIn: Number(amt) / 1e18, out: q.out });
       }
       const bal = await this.tokenBal(w, t.address);
       const qty = bal * Math.min(100, Number(amount)) / 100;
@@ -572,6 +600,7 @@ export class LiveTrader extends EventEmitter {
       if (w.bnb && amt > w.bnb) throw new Error(`BNB 余额不足（${w.bnb.toFixed(4)}）`);
       r = this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
+        : this.useGwei(t) ? await this.gweiTrade.buy({ wallet: w.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
         : this.usePortal(t, 'buy')
         ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step })
@@ -586,6 +615,8 @@ export class LiveTrader extends EventEmitter {
         r = await this.gangV2.sell({ wallet: w.address, token: t.address, pct, slippage, step, toBnb: this.settings.sellToBnb });
       } else if (this.useGang(t)) {
         r = await this.gangTrade.sell({ wallet: w.address, token: t.address, pct, slippage, step });
+      } else if (this.useGwei(t)) {
+        r = await this.gweiTrade.sell({ wallet: w.address, pct, slippage, step });
       } else if (this.useOpenFour(t)) {
         r = await this.openFourSell({ w, t, pct, slippage, step });
       } else if (this.usePortal(t, 'sell')) {

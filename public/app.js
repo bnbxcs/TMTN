@@ -4,7 +4,7 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const SUBS = '₀₁₂₃₄₅₆₇₈₉';
 
 /* 持仓快照：放最前面，启动过程中（还没执行到持仓页代码）也能读 */
-const HOLD = { data: null, open: new Set(), plats: new Set(['flap', 'four', 'gang']) };
+const HOLD = { data: null, open: new Set(), plats: new Set(['flap', 'four', 'gang', 'gwei']) };
 const S = {
   tokens: new Map(), selected: null, detail: null, platform: 'four', listTab: 'curve', chips: new Set(),
   side: 'buy', amtMode: 'bnb', slippage: 35, selWallets: new Set(['big']), activeWallet: 'big',
@@ -86,6 +86,7 @@ const tagsHtml = (t) => {
   const st = t.stage === 'curve' ? '<i class="tag b">内盘</i>' : t.stage === 'dex' ? '<i class="tag g">已迁移</i>' : '<i class="tag gray">已撤池</i>';
   const kind = t.platform === 'four' ? (t.agentExclusive !== false ? '<i class="tag r">Agent 专属</i>' : '<i class="tag r">Four 内盘</i>')
     : t.platform === 'gang' ? (t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>')
+    : t.platform === 'gwei' ? '<i class="tag gweiy">GWEI 曲线</i>'
     : (t.source && t.source !== 'agent-curve' ? '<i class="tag p">Flap 内盘</i>' : '<i class="tag p">Agent 曲线</i>');
   return st + kind + `<i class="tag y">${t.quote} 池</i>` + taxChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
 };
@@ -206,13 +207,13 @@ function parseRoute() {
   if (/^#\/?pulse/.test(location.hash)) return { pulse: true, p: null, t: null, ca: null };
   if (/^#\/?hold/.test(location.hash)) return { hold: true, p: null, t: null, ca: null };
   const [p, t, ca] = location.hash.replace(/^#\/?/, '').split('/');
-  return { p: ['four', 'flap', 'gang'].includes(p) ? p : null, t: ['curve', 'soon', 'dex', 'mine'].includes(t) ? t : null, ca: /^0x[0-9a-fA-F]{40}$/.test(ca || '') ? ca.toLowerCase() : null };
+  return { p: ['four', 'flap', 'gang', 'gwei'].includes(p) ? p : null, t: ['curve', 'soon', 'dex', 'mine'].includes(t) ? t : null, ca: /^0x[0-9a-fA-F]{40}$/.test(ca || '') ? ca.toLowerCase() : null };
 }
 // 左侧面板等选择记到 localStorage，Cmd+R 后恢复；URL hash 优先
 function savePrefs() { try { localStorage.setItem('ui', JSON.stringify({ platform: S.platform, listTab: S.listTab, chips: [...S.chips], view: S.view, bottomTab: S.bottomTab, interval: S.interval, metric: S.metric, amtMode: S.amtMode, selected: S.selected, amount: $('#amount')?.value || '' })); } catch { /* ignore */ } }
 function loadPrefs() {
   let p = {}; try { p = JSON.parse(localStorage.getItem('ui') || '{}') || {}; } catch { /* ignore */ }
-  if (['four', 'flap', 'gang'].includes(p.platform)) S.platform = p.platform;
+  if (['four', 'flap', 'gang', 'gwei'].includes(p.platform)) S.platform = p.platform;
   if (['curve', 'soon', 'dex', 'mine'].includes(p.listTab)) S.listTab = p.listTab;
   if (Array.isArray(p.chips)) S.chips = new Set(p.chips);
   if (p.bottomTab) S.bottomTab = p.bottomTab; if (+p.interval) S.interval = +p.interval; if (p.metric) S.metric = p.metric;
@@ -373,7 +374,7 @@ function renderList() {
   const cnt = (p) => [...S.tokens.values()].filter((t) => t.platform === p && t.stage === 'curve').length;
   $('#agentCnt').textContent = cnt('four');
   const fresh = (p) => [...S.tokens.values()].filter((t) => t.platform === p && Date.now() - t.createdAt < 60_000).length || '';
-  $('[data-n="four"]').textContent = fresh('four'); $('[data-n="flap"]').textContent = fresh('flap');
+  $('[data-n="four"]').textContent = fresh('four'); $('[data-n="flap"]').textContent = fresh('flap'); if ($('[data-n="gwei"]')) $('[data-n="gwei"]').textContent = fresh('gwei');
 }
 
 function renderStatus() {
@@ -382,7 +383,7 @@ function renderStatus() {
   const n = [...S.tokens.values()].filter((x) => x.platform === S.platform && x.stage === 'curve').length;
   const ago = (Date.now() - (S.net.detectAt || 0)) / 1000;
   $('#agentStatus').innerHTML = `
-    <div class="l1"><span class="muted">${S.platform === 'four' ? 'Agent 专属' : S.platform === 'gang' ? 'Gang' : 'Agent 曲线'} <b class="mono" style="color:var(--text)">${n}</b></span>
+    <div class="l1"><span class="muted">${S.platform === 'four' ? 'Agent 专属' : S.platform === 'gang' ? 'Gang' : S.platform === 'gwei' ? 'GWEI' : 'Agent 曲线'} <b class="mono" style="color:var(--text)">${n}</b></span>
       ${LIVE() ? `<span class="muted">${S.baw?.connected ? '<b class="g">baw 已连接</b>' : '<b class="r">baw 未连接</b>'} · 白名单以合约为准</span>` : S.platform === 'four' ? `<b class="${w.agentId ? 'g' : 'r'}">Agent ID ${w.agentId ? '✓' : '✗'}</b><b class="${el.ok ? 'g' : 'r'}">${el.ok ? '已在白名单' : el.why}</b>` : '<b class="g">无需白名单</b>'}</div>
     ${LIVE() ? `<div class="l2" style="text-align:left;color:var(--muted)">Reader ${S.net.curve?.connected ? `<span class="g">✓ ${S.net.curve.total} 个市场</span>` : `<span class="r">✗ ${esc(S.net.curve?.lastError || '连接中')}</span>`} · Four ${S.net.four?.connected ? `<span class="g">✓ ${S.net.four.total}</span>` : `<span class="r">${S.net.four?.lastError ? '✗' : '回补中…'}</span>`} · Gang ${S.net.gang?.connected ? `<span class="g">✓ ${S.net.gang.total}</span>` : `<span class="r">${S.net.gang?.lastError ? '✗' : '连接中…'}</span>`} · shrine ${S.net.shrine?.launch?.connected ? '<span class="g">✓</span>' : '<span class="r">✗</span>'} · baw ${S.baw?.connected ? '<span class="g">✓</span>' : '<span class="r">✗</span>'}</div>` : ''}
     <div class="l2"><span class="spin">⟳</span> 链上检测中 · ${ago < 5 ? '刚刚' : Math.floor(ago) + 's 前'} · ${S.net.detect || 0}ms</div>`;
@@ -454,7 +455,7 @@ function renderHead() {
 // K 线用 TradingView Lightweight Charts（Apache-2.0，public/vendor/ 里的本地副本）：拖动、滚轮/捏合缩放、十字光标都由库处理
 function aggregate() {
   const src = S.detail?.candles || []; const iv = S.interval; const out = [];
-  const qu = S.detail?.quoteUsd || S.bnbUsd; const f = S.metric === 'mcap' ? 1e9 * qu : qu;
+  const qu = S.detail?.quoteUsd || S.bnbUsd; const f = S.metric === 'mcap' ? (S.detail?.maxSupply || 1e9) * qu : qu;
   for (const c of src) {
     const b = Math.floor(c.t / iv) * iv; const l = out[out.length - 1];
     if (l && l.t === b) { l.h = Math.max(l.h, c.h * f); l.l = Math.min(l.l, c.l * f); l.c = c.c * f; l.v += c.v; }
@@ -671,7 +672,7 @@ function renderMyPos(t) {
   const ps = S.positions.filter((p) => p.token === t.address);
   const sum = (k) => ps.reduce((a, p) => a + (p[k] || 0), 0);
   const hr = LIVE() ? holdRow(t) : null;   /* 实盘：和一键买卖、我的持仓用同一份持仓快照（报价币已按 BNB 价换算成美元） */
-  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
+  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : t.platform === 'gwei' ? 'GWEI · Agent ID 专属曲线' : 'Flap · Agent 曲线';
   const tag = LIVE() ? `${plat} · 资格以合约为准` : t.platform === 'four' ? `Four：${eligible(wallet(S.activeWallet), t).ok ? '钱包已在白名单' : '钱包不在白名单'}` : `${plat}`;
   const usd = (v) => (v == null ? '—' : '$' + v.toFixed(2)), sgn = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
   let amt, rows;
@@ -699,15 +700,16 @@ function renderInfo(t) {
   if (!t) { $('#tokenInfo').innerHTML = ''; return; }
   const el = eligible(wallet(S.activeWallet), t);
   const box = (k, v) => `<div class="addrbox"><span>${k}</span><b data-copy="${v}" title="点击复制">${v}</b></div>`;
-  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : 'Flap Agent 曲线代币信息'}</h4>
+  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : t.platform === 'gwei' ? 'GWEI 代币信息' : 'Flap Agent 曲线代币信息'}</h4>
     ${box('代币', t.address)}${t.vault ? box(LIVE() ? 'Market' : 'Vault', t.vault) : ''}${t.creator ? box('创建者', t.creator) : ''}
-    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : 'Flap（flap.sh）'}</b></div>
+    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : t.platform === 'gwei' ? 'gwe1.xyz（代币合约就是曲线，单笔 ≤ 0.1 BNB，100 BNB 迁移 PancakeSwap）' : 'Flap（flap.sh）'}</b></div>
     <div class="kv"><span>预设</span><b class="sans">${t.preset} <span class="muted mono">${t.presetId}</span></b></div>
     <div class="kv"><span>计价资产</span><b>${t.quote}${t.quote !== 'BNB' ? '（Core 同笔兑换）' : ''}</b></div>
     <div class="kv"><span>状态</span><b class="sans ${t.stage === 'curve' ? 'b' : t.stage === 'dex' ? 'g' : 'r'}">${t.stage === 'curve' ? `内盘 ${t.progress.toFixed(2)}%` : t.stage === 'dex' ? '已迁移 PancakeSwap' : '已撤池'}</b></div>
     <div class="kv"><span>交易资格</span><b class="sans ${el.ok ? 'g' : 'r'}">${el.ok ? '你的钱包可交易' : '你的钱包' + el.why}</b></div>
     ${LIVE() ? `<div class="kv"><span>已筹 / 上限</span><b>${amt(t.raised)} / ${amt(t.target)} ${esc(t.quote)}</b></div>`
-      : `<div class="kv"><span>总量 / 内盘出售</span><b>1.00B / 800M</b></div><div class="kv"><span>每钱包上限</span><b>${t.platform === 'four' || t.platform === 'gang' ? '总量 1%（10M）' : '不限'}</b></div>`}`;
+      : `<div class="kv"><span>总量 / 内盘出售</span><b>1.00B / 800M</b></div><div class="kv"><span>每钱包上限</span><b>${t.platform === 'four' || t.platform === 'gang' ? '总量 1%（10M）' : '不限'}</b></div>`}
+    ${t.platform === 'gwei' ? '<div class="kv"><span>总量 / 每钱包上限</span><b>21M / 总量 1%（210K）</b></div>' : ''}`;
 }
 
 let qTimer;
@@ -951,7 +953,7 @@ document.addEventListener('click', async (e) => {
     e.preventDefault();
     if (!LIVE()) return toast({ status: 'failed', symbol: '模拟盘', reason: '模拟代币没有真实链上页面' });
     const t = S.tokens.get(S.selected); if (!t) return;
-    const url = { four: t.platform === 'four' ? `https://four.meme/token/${t.address}` : t.platform === 'gang' ? `https://gang.fun/token/${t.address.toLowerCase()}` /* Gang（老盘和 V2）：直接打开这个币在 gang.fun 的页面 */ : 'https://flap.sh/apps/agent-bonding-curve?lang=zh' /* Flap：打开 Agent Bonding Curve 页面 */, bsc: `https://bscscan.com/token/${t.address}`, gmgn: `https://gmgn.ai/bsc/token/${t.address}` }[d.ext];
+    const url = { four: t.platform === 'four' ? `https://four.meme/token/${t.address}` : t.platform === 'gang' ? `https://gang.fun/token/${t.address.toLowerCase()}` /* Gang（老盘和 V2）：直接打开这个币在 gang.fun 的页面 */ : t.platform === 'gwei' ? 'https://gwe1.xyz/' :'https://flap.sh/apps/agent-bonding-curve?lang=zh' /* Flap：打开 Agent Bonding Curve 页面 */, bsc: `https://bscscan.com/token/${t.address}`, gmgn: `https://gmgn.ai/bsc/token/${t.address}` }[d.ext];
     return window.open(url, '_blank', 'noopener');
   }
   if (d.close !== undefined) return el.closest('.modal').classList.add('hidden');
@@ -1768,7 +1770,7 @@ function renderHold() {
   const d = HOLD.data; if (!d || S.view !== 'hold') return;
   const dust = $('#holdDust').checked;
   $$('#holdPlats [data-hp]').forEach((c) => c.classList.toggle('off', !HOLD.plats.has(c.dataset.hp)));
-  const rows = d.rows.filter((r) => HOLD.plats.has(r.platform === 'four' || r.platform === 'gang' ? r.platform : 'flap') && (!dust || (r.amount > 0 && r.valueBnb >= 0.0005) || r.stage === 'claim'));
+  const rows = d.rows.filter((r) => HOLD.plats.has(r.platform === 'four' || r.platform === 'gang' || r.platform === 'gwei' ? r.platform : 'flap') && (!dust || (r.amount > 0 && r.valueBnb >= 0.0005) || r.stage === 'claim'));
   const T = d.totals || {};
   // 「持仓中」按页面上实际显示的行数算；被「隐藏小额」藏起来的单独说明
   const openRows = d.rows.filter((r) => r.amount > 0), shownOpen = rows.filter((r) => r.amount > 0).length, hiddenOpen = openRows.length - shownOpen;
@@ -1780,7 +1782,7 @@ function renderHold() {
   const stageTxt = (r) => (r.stage === 'claim' ? '<span class="tag y">可领取</span>' : r.stage === 'curve' ? '<span class="tag">内盘</span>' : '<span class="tag g">已迁移</span>');
   const canTrade = (r) => r.amount > 0;
   $('#holdBody').innerHTML = rows.length ? `<table><tr><th class="l">代币</th><th class="l">状态</th><th>数量</th><th>占总量</th><th title="平均买入价（美元；悬停看报价币 / BNB 单价）">买入均价</th><th>市值</th><th>成本</th><th>已卖出</th><th>盈亏</th><th>卖出费率</th><th>首次买入</th><th class="l">操作</th></tr>
-    ${rows.map((r) => `<tr class="hrow" data-hold="${r.token}"><td class="l"><span class="side" data-a="${r.token}">${logoHtml({ ...r, address: r.token })}<span><b>${esc(r.symbol)}</b> <i class="pbadge" style="margin-left:4px">${r.platform === 'four' ? 'Four' : r.platform === 'gang' ? 'Gang' : 'Flap'}</i>${r.isQuote ? '<i class="pbadge" style="margin-left:4px;color:#f0b90b" title="这个币也是其他盘的报价币：Gang V2 / Flap 买卖时换出来、没换回 BNB 的部分会留在这里">计价币</i>' : ''}<div class="hsub">${esc(r.name || '')}${r.source === 'app' ? ' · 成本按本程序订单' : ''}</div>${ruleBanner(r.token)}</span></span></td>
+    ${rows.map((r) => `<tr class="hrow" data-hold="${r.token}"><td class="l"><span class="side" data-a="${r.token}">${logoHtml({ ...r, address: r.token })}<span><b>${esc(r.symbol)}</b> <i class="pbadge" style="margin-left:4px">${r.platform === 'four' ? 'Four' : r.platform === 'gang' ? 'Gang' : r.platform === 'gwei' ? 'GWEI' : 'Flap'}</i>${r.isQuote ? '<i class="pbadge" style="margin-left:4px;color:#f0b90b" title="这个币也是其他盘的报价币：Gang V2 / Flap 买卖时换出来、没换回 BNB 的部分会留在这里">计价币</i>' : ''}<div class="hsub">${esc(r.name || '')}${r.source === 'app' ? ' · 成本按本程序订单' : ''}</div>${ruleBanner(r.token)}</span></span></td>
       <td class="l">${stageTxt(r)}</td><td>${K(r.amount)}</td><td>${r.supplyPct != null ? r.supplyPct.toFixed(3) + '%' : '—'}</td><td title="${r.avgBuyQuote && r.quote !== 'BNB' ? sub(r.avgBuyQuote) + ' ' + esc(r.quote) : r.avgBuyBnb ? sub(r.avgBuyBnb) + ' BNB' : ''}">${r.avgBuyUsd ? '$' + sub(r.avgBuyUsd) : '—'}</td>
       <td>${r.valueBnb != null ? `<span title="${bnb(r.valueBnb)} BNB${r.quote !== 'BNB' && r.price ? ` · ${K(r.amount * r.price)} ${esc(r.quote)}` : ''}">$${(r.valueUsd || 0).toFixed(2)}</span>` : `<span class="y" title="${esc(r.warn || '')}">— ⚠</span>`}</td><td title="${usdTip(r)}">$${(r.costUsd || 0).toFixed(2)}</td><td title="${usdTip(r)}">${r.soldBnb ? '$' + (r.soldUsd || 0).toFixed(2) : '$0'}</td>
       <td title="${usdTip(r)}">${r.pnlUsd == null ? `<span class="muted" title="${esc(r.warn || '')}">—</span>` : sgn(r.pnlUsd, (v) => '$' + v.toFixed(2))}${r.pnlPct != null ? ' <span class="hsub">' + sgn(r.pnlPct, (v) => v.toFixed(1) + '%') + '</span>' : ''}</td><td class="${(S.tokens.get(r.token)?.sellFeePct || 0) >= 5 ? 'r' : ''}">${pctTxt(S.tokens.get(r.token)?.sellFeePct)}</td><td>${ago(r.firstAt)}</td>
@@ -1806,8 +1808,8 @@ setInterval(() => { if (S.view === 'hold') loadHold(); }, 12_000);
 for (const ms of [4000, 8000, 22000]) window.addEventListener('order-done', () => setTimeout(() => { if (S.view === 'hold') loadHold(); }, ms));
 
 /* ---------- 战壕：三列（新创建 / 即将打满 / 已开盘），每列自己的搜索、快捷买入金额、P1-P3 预设、声音、隐藏、筛选 ---------- */
-const PLATS = ['flap', 'four', 'gang'];
-const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' ? t.platform : 'flap');
+const PLATS = ['flap', 'four', 'gang', 'gwei'];
+const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' || t.platform === 'gwei' ? t.platform : 'flap');
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
 const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', quote: '', social: false, maxTax: '', hideUnknownTax: false } });
 const TR = (() => {
@@ -1874,7 +1876,7 @@ function tcFilterSummary(k) {
 function tcFilterPop(k) {
   const f = P(k).f;
   return `<div class="tc-pop" data-tpop="${k}">
-    <div class="tp-row"><span>平台</span>${PLATS.map((p) => `<label><input type="checkbox" data-tfp="${k}:${p}" ${f.plats.includes(p) ? 'checked' : ''}/>${{ flap: 'Flap', four: 'Four', gang: 'Gang' }[p]}</label>`).join('')}</div>
+    <div class="tp-row"><span>平台</span>${PLATS.map((p) => `<label><input type="checkbox" data-tfp="${k}:${p}" ${f.plats.includes(p) ? 'checked' : ''}/>${{ flap: 'Flap', four: 'Four', gang: 'Gang', gwei: 'GWEI' }[p]}</label>`).join('')}</div>
     <div class="tp-row"><span>市值 $</span><input data-tff="${k}:minMc" value="${f.minMc}" placeholder="最低"/><input data-tff="${k}:maxMc" value="${f.maxMc}" placeholder="最高"/></div>
     <div class="tp-row"><span>持有人 ≥</span><input data-tff="${k}:minHolders" value="${f.minHolders}"/><span>进度 ≥ %</span><input data-tff="${k}:minProg" value="${f.minProg}"/></div>
     <div class="tp-row"><span>报价币</span><input data-tff="${k}:quote" value="${esc(f.quote)}" placeholder="BNB, BNCB…"/><label><input type="checkbox" data-tfs="${k}" ${f.social ? 'checked' : ''}/>有社交链接</label></div>
@@ -1917,7 +1919,7 @@ function tcCard(t, k) {
   const fb = t.firstBuyer ? (t.firstBuyerName || nameOf({ trader: t.firstBuyer }) || short(t.firstBuyer, 4, 4)) : '';
   const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%` : `${esc(t.quote || 'BNB')} | 已迁移 DEX`;
   return `<div class="tcard ${plat} ${hp ? 'held' : ''} " data-pa="${t.address}">
-    <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G' }[plat]}</i></div>
+    <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G', gwei: 'W' }[plat]}</i></div>
       <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}" title="创建者（Dev）：${esc(t.creator || '')}${isMe(t.creator) ? '（我）' : ''}">${esc(dev)}</div></div>
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
@@ -1938,7 +1940,7 @@ function tlCard(t) {
   const dev = t.creatorName || (t.creator ? short(t.creator, 6, 4) : '');
   const route = curve ? `${amtFmt(t.raised)}/${amtFmt(t.target)} ${esc(t.quote || 'BNB')} · ${prog.toFixed(1)}%` : `已迁移 DEX · ${esc(t.quote || 'BNB')}`;
   return `<div class="tlc ${plat} ${t.address === S.selected ? 'sel' : ''}" data-pa="${t.address}" title="${esc(t.name || t.symbol)}${dev ? ' · Dev ' + esc(dev) : ''}">
-    <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G' }[plat]}</i></div>
+    <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G', gwei: 'W' }[plat]}</i></div>
     <div class="tlc-m">
       <div class="tlc-r1"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
         <span class="tlc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算' : '市值'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</span>
@@ -2098,7 +2100,7 @@ function tfModal(k) {
   const f0 = P(k).f;
   const dr = { ...defPreset().f, ...JSON.parse(JSON.stringify(f0)) };
   const quotes = [...new Set([...S.tokens.values()].map((t) => String(t.quote || '').toUpperCase()).filter(Boolean))].sort();
-  const PN = { flap: 'Flap', four: 'Four', gang: 'Gang' };
+  const PN = { flap: 'Flap', four: 'Four', gang: 'Gang', gwei: 'GWEI' };
   const m = document.createElement('div'); m.id = 'tfModal'; m.className = 'tfm-bg';
   const qset = () => new Set(String(dr.quote || '').toUpperCase().split(/[,，\s]+/).filter(Boolean));
   const draw = () => {

@@ -9,6 +9,7 @@ import { MetaFetcher, ipfsUrl } from './meta.js';
 import { GangFun } from './gangFun.js';
 import { GangChain } from './gangChain.js';
 import { GangV2 } from './gangV2Pads.js';
+import { GweiFeed, GWEI, GWEI_MAX_SUPPLY, gweiProgress } from './gwei.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
 import * as fsi from './fsi.js';
@@ -32,6 +33,7 @@ export class LiveMarket extends EventEmitter {
     this.gang = new GangFun();
     this.gangChain = new GangChain(this.provider);   // 链上创建事件，比接口轮询快
     this.gangChain.on('token', (it) => this.onGangChainToken(it));
+    this.gwei = new GweiFeed(this.provider);
     this.meta = new MetaFetcher();
     this.names = new NameCache();
     this.feeds = new ShrineFeeds();
@@ -54,6 +56,10 @@ export class LiveMarket extends EventEmitter {
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
     this.gang.start(); this.gangChain.start();
+    this.gwei.on('token', (st) => this.upsertGwei(st));
+    this.gwei.on('trade', (tr, { live }) => this.onGweiTrade(tr, live));
+    this.gwei.on('holders', (h) => { this.gweiHolders = h.holders; const t = this.get(GWEI); if (t) t.holders = h.holders; for (const [a, n] of h.names) this.names.set(a, n); });
+    this.gwei.start();
     this.feeds.start();
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
@@ -77,7 +83,7 @@ export class LiveMarket extends EventEmitter {
  volume: 0, buyTax: 0, sellTax: 0, feeBps: null, trades: [], candles: [], creator: '', market: null });
       if (this.tokens.size > MAX) {
         const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
-        const old = [...this.tokens.values()].filter((t) => !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
+        const old = [...this.tokens.values()].filter((t) => !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && t.source !== 'gwei' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
         if (old) this.tokens.delete(old.address);
       }
     }
@@ -235,6 +241,29 @@ export class LiveMarket extends EventEmitter {
     if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });   // Gang V2 的金额是报价币（GANG / BNCB…），按报价币价格换美元
   }
 
+  // GWEI：只有一个币，状态每 4 秒从合约读一次；总量固定 2100 万，市值 = 现价 × 2100 万
+  upsertGwei(st) {
+    const existed = this.tokens.has(GWEI);
+    const t = this.base(GWEI);
+    Object.assign(t, {
+      source: 'gwei', platform: 'gwei', agentExclusive: true, symbol: 'GWEI', name: 'GWEI', quote: 'BNB', quoteAddress: null, maxSupply: GWEI_MAX_SUPPLY,
+      stage: st.graduated ? 'dex' : 'curve', raised: st.reserve, target: 100, progress: st.graduated ? 100 : gweiProgress(st.reserve), remaining: GWEI_MAX_SUPPLY - st.supply,
+      price: st.price, mcapUsd: st.price * GWEI_MAX_SUPPLY * this.quoteUsd(t), feeBps: 10, sellFeeBps: 10, pair: st.pair, website: 'https://gwe1.xyz/', pinned: true,
+    });
+    if (!existed) { t.createdAt = Date.parse('2026-10-24T16:08:35Z') /* 部署区块 129543215 */; t.holders = this.gweiHolders ?? null; this.emit('detail', t.address); }
+  }
+
+  onGweiTrade(tr, live) {
+    const t = this.get(GWEI); if (!t) return;
+    if (tr.tx && t.trades.some((x) => x.tx === tr.tx && x.side === tr.side)) return;
+    if (tr.name) this.names.set(tr.trader, tr.name);
+    if (tr.side === 'buy') t.buys++; else t.sells++;
+    t.volume += tr.bnb;
+    const trade = { ts: tr.ts, side: tr.side, bnb: tr.bnb, tokens: tr.tokens, price: tr.price, trader: tr.trader, tx: tr.tx, name: tr.name };
+    this.addTrade(t, trade);
+    if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });
+  }
+
   // four.meme 成交：更新已筹、进度、价格、K 线和成交列表
   onFourTrade(tr) {
     const t = this.get(tr.token); if (!t || t.source !== 'four-agent') return;
@@ -362,7 +391,7 @@ export class LiveMarket extends EventEmitter {
           const rows = await this.gang.history(t.address).catch(() => null);
           if (rows?.length) { t.candles = []; for (const r of rows) if (r.price > 0) this.pushCandle(t, r.ts, r.price, r.bnb); t._chgAt = 0; }
         }
-      } else if (t.source === 'four-agent') {
+      } else if (t.source === 'four-agent' || t.source === 'gwei') {
         // 已由链上事件实时更新，不再请求 shrine（经常 429）
         if (t.stage === 'dex') await this.dexCandles(t);
       } else {
@@ -418,13 +447,13 @@ export class LiveMarket extends EventEmitter {
     const priceUsd = t.price * this.quoteUsd(t); const liqUsd = t.dexLiqUsd || (t.raised || 0) * this.quoteUsd(t);
     return {
       address: t.address, symbol: t.symbol, name: t.name, platform: t.platform, source: t.source, agentExclusive: !!t.agentExclusive, market: t.market,
-      preset: t.source === 'gang' ? 'Gang（Agent 专属）' : t.source === 'agent-curve' ? 'Flap Agent Curve' : t.platform === 'four' ? (t.agentExclusive ? 'Binance Agent ID Exclusive' : 'Four.meme') : 'Flap',
+      preset: t.source === 'gang' ? 'Gang（Agent 专属）' : t.source === 'gwei' ? 'GWEI（Agent 专属曲线）' : t.source === 'agent-curve' ? 'Flap Agent Curve' : t.platform === 'four' ? (t.agentExclusive ? 'Binance Agent ID Exclusive' : 'Four.meme') : 'Flap',
       presetId: t.presetId || '', quote: t.quote, quoteAddress: t.quoteAddress, creator: t.creator, firstBuyer: t.firstBuy?.trader || '', firstBuyerName: t.firstBuy ? this.names.peek(t.firstBuy.trader) : null, vault: t.market || '', createdAt: t.createdAt, officialTest: false,
       stage: t.stage, price: t.price, priceUsd, mcapUsd: t.dexMcapUsd ? t.dexMcapUsd : t.source === 'four-agent' ? (t.price || this.fourP0 || 0) * (t.maxSupply || 1e9) * this.quoteUsd(t) : t.mcapUsd, mcapEst: t.source === 'four-agent' && !t.price && !!this.fourP0, liqUsd, quoteUsd: this.quoteUsd(t), raised: t.raised, target: t.target, progress: t.progress || 0,
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: t.source === 'four-agent' && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: this.sellFeePct(t), antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
       chg: this.change(t),
-      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
+      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, ...(t.source === 'gwei' ? { maxSupply: t.maxSupply } : {}), description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
     };
   }
 
@@ -449,6 +478,7 @@ export class LiveMarket extends EventEmitter {
     let list = [], complete = true;
     if (t.source === 'gang') list = await this.gang.history(t.address, 20000);
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
+    else if (t.source === 'gwei') list = t.trades.map((x) => ({ ...x }));   // 全部成交已经在内存里（gwe1.xyz 索引器 + 链上事件）
     else if (t.market) { list = await fsi.fetchTrades(t.market, 5000); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);
     for (const x of list) { x.name ||= this.names.peek(x.trader); x.usd = (x.bnb || 0) * this.quoteUsd(t); }

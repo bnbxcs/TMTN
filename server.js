@@ -159,8 +159,17 @@ app.get('/api/cost-for-pct', async (req, res) => {
   // Four Agent 专属币每个钱包最多持有总量 1%，超过的部分买不到，按 1% 算，避免反推出离谱的 BNB
   const tk = market.get?.(q.token); let capped = false; const asked = pct; const notes = [];
   // Four / Gang 都是单钱包最多持有总量 1%
-  if ((tk?.platform === 'four' || tk?.platform === 'gang') && pct > 1) { pct = 1; capped = true; }
-  let target = 1_000_000_000 * pct / 100;
+  if ((tk?.platform === 'four' || tk?.platform === 'gang' || tk?.platform === 'gwei') && pct > 1) { pct = 1; capped = true; }
+  const supply = tk?.source === 'gwei' ? tk.maxSupply || 21_000_000 : 1_000_000_000;   // GWEI 总量 2100 万，其它盘 10 亿
+  let target = supply * pct / 100;
+  // GWEI：合约 maxWallet 减去已持有 = 还能买多少
+  if (tk?.source === 'gwei' && trader.useGwei?.(tk)) {
+    try {
+      const w = trader.wallet?.(q.wallet); const room = (w ? await trader.gweiTrade.walletRoom(w.address) : supply / 100) * 0.99;
+      if (room <= supply / 100 * 0.001) return res.json({ bnb: 0, capReached: true, error: '已达单钱包上限 1%' });
+      if (target > room) { target = room; capped = true; pct = +(room / (supply / 100)).toFixed(3); }
+    } catch { /* 读不到额度就按 1% */ }
+  }
   // Four 单钱包最多 1%：扣掉当前持仓，只买剩下的部分
   if (tk?.platform === 'four') {
     try {
@@ -206,6 +215,7 @@ app.get('/api/cost-for-pct', async (req, res) => {
     if (!ok) return res.json({ bnb: 0, error: '拿不到报价' });
     // 下单前一次性把金额压到能成交的范围：持仓上限 → 单笔上限 → 余额（留 0.002 BNB 付 gas），不让后端先失败再重试
     if (capped) notes.push(asked > 1 && pct >= 0.98 ? `${asked}% 超过单钱包上限 1%，已按 1% 买入` : `${asked}% 超过单钱包剩余额度，已按剩余额度（约 ${pct}%）买入`);
+    if (tk?.source === 'gwei' && a > 0.1) { a = 0.1; notes.push('GWEI 合约单笔最多 0.1 BNB，已按 0.1 BNB 买入（要买更多请分几笔）'); }
     const maxTrade = LIVE ? Number(trader.status?.maxTradeBnb) || 0 : 0;
     if (maxTrade > 0 && a > maxTrade) { a = maxTrade; notes.push(`超过单笔上限 ${maxTrade} BNB，已按 ${maxTrade} BNB 买入`); }
     const w = trader.wallet?.(q.wallet); const bal = Number(w?.bnb) || 0;

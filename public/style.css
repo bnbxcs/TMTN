@@ -419,7 +419,7 @@ td.addr { color: var(--muted); }
 .tc-img .logo.tl { width: 64px; height: 64px; font-size: 22px; border-radius: 8px !important; }
 .tc-img .logo.tl img { border-radius: 8px !important; }
 .tc-badge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50% !important; display: grid; place-items: center; font: 800 9px/1 var(--mono, monospace); font-style: normal; color: #fff; border: 2px solid #0b0b0f; background: #7b3fe4; }
-.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; }
+.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; } .tc-badge.gwei { background: #4c6fff; }
 .tc-prog { height: 3px; background: #2a2440; border-radius: 2px; overflow: hidden; width: 64px; } .tc-prog i { display: block; height: 100%; background: #0ecb81; }
 .tc-dev { font: 10px var(--mono, monospace); color: #6b7280; width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-m { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -505,6 +505,8 @@ td.addr { color: var(--muted); }
 .pg, .pcard.gang .pbadge, .hold .pbadge.gang { color: #fcd535 !important; background: rgba(252, 213, 53, .14) !important; }
 .seg.plat button.active[data-p="gang"] { color: #fcd535 !important; }
 .tag.gangy { color: #fcd535; background: rgba(252, 213, 53, .14); }
+.tag.gweiy, .pw { color: #8ab4ff; background: rgba(138, 180, 255, .14); }
+.tfm-c.pf-gwei.on { color: #8ab4ff; border-color: #8ab4ff; background: rgba(138,180,255,.12); }
 
 /* 搜索历史 */
 #searchResults .sh-head { display: flex; align-items: center; font-size: 12px; color: var(--muted, #888); cursor: default; }

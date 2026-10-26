@@ -6,7 +6,7 @@
 
 <p align="center"><b><i>TMTN = The Match, The Night</i></b></p>
 
-> **English summary.** TMTN is a local, single-user trading terminal for BSC "agent-only" meme launchpads — **Flap Agent Bonding Curve**, **Four.meme (OpenFour, Agent-ID-exclusive template)** and **gang.fun (old pad + V2 pads)**. It runs a small Node.js server on `127.0.0.1` plus a browser UI. All signing goes through Binance's **Agentic Wallet CLI (`baw`)**, so **no private key is ever stored or handled locally**. Features include a GMGN-style trenches view, K-line charts, live trade feed, per-trader PnL drawer, one-click buy/sell panel, holdings with USD PnL, auto-claim and optional per-platform auto-transfer. **It trades real funds. It is unaudited. Use entirely at your own risk.**
+> **English summary.** TMTN is a local, single-user trading terminal for BSC "agent-only" meme launchpads — **Flap Agent Bonding Curve**, **Four.meme (OpenFour, Agent-ID-exclusive template)**, **gang.fun (old pad + V2 pads)** and **GWEI** (a single agent-only bonding-curve token, gwe1.xyz). It runs a small Node.js server on `127.0.0.1` plus a browser UI. All signing goes through Binance's **Agentic Wallet CLI (`baw`)**, so **no private key is ever stored or handled locally**. Features include a GMGN-style trenches view, K-line charts, live trade feed, per-trader PnL drawer, one-click buy/sell panel, holdings with USD PnL, auto-claim and optional per-platform auto-transfer. **It trades real funds. It is unaudited. Use entirely at your own risk.**
 
 ---
 
@@ -17,13 +17,14 @@
 - **代码未经审计**，可能存在 bug（价格换算、精度、授权、路由等）。请先用模拟盘和极小金额试用。
 - **自动转出（自动把领取 / 发射后的代币转到指定地址）**：一旦打开，资金会在无人确认的情况下转走。请确认目标地址是你自己的，并理解风险后再打开。默认全部关闭。
 - **预先授权（较大固定额度）**：为了更快，卖出 / 报价币买入时会授权比本次需要更大的额度（不是无限额）。被授权合约如果出问题，可动用的代币会更多。可以在页面关闭，或在「授权管理」里随时撤销。
-- 本项目与币安、Flap、four.meme、gang.fun 等平台**没有任何关联**，第三方接口随时可能变化或失效。
+- 本项目与币安、Flap、four.meme、gang.fun、GWEI 等平台**没有任何关联**，第三方接口随时可能变化或失效。
 
 ## 它是什么
 
 一个跑在你自己电脑上的 BSC 内盘交易终端：
 
 - 实时发现 **Flap Agent 曲线**、**Four（OpenFour / Agent ID 专属模板）**、**gang.fun（老盘 + V2 报价币盘）** 的新盘、即将发射、已迁移的代币；
+- **GWEI**（gwe1.xyz）：单个 Agent ID 专属曲线币（代币合约本身就是曲线，单笔 ≤ 0.1 BNB、每钱包 ≤ 1%、100 BNB 迁移 PancakeSwap），单独一个标签页；
 - 用币安 **Agentic Wallet CLI（`baw`）** 下单：签名在币安那边完成，本地**不保存私钥**；
 - 浏览器界面（`http://127.0.0.1:<PORT>`），单人使用。
 
@@ -133,6 +134,7 @@ engine/
     fourMeme.js openFour.js              Four：链上事件、OpenFour 技能脚本
     gangFun.js gangTrade.js gangV2Pads.js  gang.fun：接口、老盘、V2 盘
     gangChain.js     gang.fun 新盘：监听链上创建事件（WSS 订阅 + getLogs 补查），比接口轮询快
+    gwei.js          GWEI：合约状态 + Buy / Sell 事件 + gwe1.xyz 历史成交；曲线 buy / sell（卖出不用授权）
     portal.js        Flap Portal 买 / 卖 / 领取、发交易并等回执
     liveTrader.js    下单流程、自动领取、单币规则 / 自动转出、计价币换回 BNB、授权管理
     holdings.js      持仓与盈亏（钱包历史、历史 BNB 价格、链上卖出报价核对）
@@ -258,9 +260,10 @@ curl -s -X POST http://127.0.0.1:8788/api/order -H 'content-type: application/js
 | OpenFour Core（模板 `1778027615735`） | `0xebe7b6c1089d9f72ad07f34e36d898e44e5e27f3` |
 | gang.fun 老盘 | `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7` |
 | gang.fun V2 pads | `0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`、`0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb`、`0x60aee38576035E757deD30fF8db8A8DA476430C1` |
+| GWEI（代币 + 曲线，同一个合约） | `0xe0db0b90cb649d75dfa7f0956ea9fa524ec4025d` |
 | WBNB / BNCB / GANG | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c` / `0x4902C5ebc598265Ed2212b559B042De8a5Eeec3f` / `0x0c6302401aa5325C2E36F170f52C00B1d220B405` |
 
-数据源：BSC RPC（bnbchain / publicnode）、gang.fun API、fsi.taxed.fun、shrine.trade、DexScreener、GeckoTerminal、币安行情接口。
+数据源：BSC RPC（bnbchain / publicnode）、gang.fun API、gwe1.xyz（GWEI 历史成交）、fsi.taxed.fun、shrine.trade、DexScreener、GeckoTerminal、币安行情接口。
 
 ## 第三方组件
 
