@@ -73,3 +73,9 @@ export const BNB_PRICE_URL = 'https://api.binance.com/api/v3/ticker/price?symbol
 // Four 代币迁移（发射）后自动把整仓转到指定钱包
 // 买入后自动「预授权」（无限额 approve）。默认关闭：无限额授权会被币安风控标成高风险，需要在 App 里确认并锁住钱包；卖出时会按本次数量授权
 export const PREAPPROVE = env('PREAPPROVE', '0') === '1';
+
+// Feast（feast.meme）：引荐人地址（可选）。填了以后每笔 Feast 买卖的 hookData 都带上它：这笔 1% 手续费里的引荐份额（发币人定 0–30%，默认 10% = 成交额的 0.1%）
+// 在链上记到这个地址名下，钱包第一次带引荐人的成交会终身绑定（FeastReferrals.referrerOf）；留空或不是地址 = 不带
+export const FEAST_REFERRER = /^0x[0-9a-fA-F]{40}$/.test(env('FEAST_REFERRER', '')) ? env('FEAST_REFERRER', '') : '';
+export const FEAST_SITE = env('FEAST_SITE', 'https://feast.meme');
+export const FEAST_API = env('FEAST_API', `${FEAST_SITE}/api/v1`);

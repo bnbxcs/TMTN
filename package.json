@@ -12,6 +12,7 @@
     "live": "MODE=live node server.js",
     "live:8788": "MODE=live LIVE_TRADE=1 PORT=8788 node server.js",
     "sim:8787": "MODE=sim PORT=8787 node server.js",
+    "test:feast": "node --test scripts/feast.test.mjs",
     "live:wallet2": "BINANCE_BAW_DIR=$HOME/.baw-wallet2 BINANCE_INSTANCE_ID=tmtn-wallet2 DATA_DIR=./data-wallet2 WALLET_SLOT=2 WALLET_LABEL='钱包 2' WALLET_PEERS='[]' FEEDS_PUBLIC=1 MODE=live LIVE_TRADE=1 PORT=8789 node server.js"
   },
   "dependencies": {

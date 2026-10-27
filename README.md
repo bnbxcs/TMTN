@@ -25,6 +25,7 @@
 一个跑在你自己电脑上的 BSC 内盘交易终端：
 
 - 实时发现 **Flap Agent 曲线**、**Four（OpenFour / Agent ID 专属模板）**、**gang.fun（老盘 + V2 报价币盘）** 的新盘、即将发射、已迁移的代币；
+- 列出 **Feast（feast.meme）** 的全部币并直接买卖：币一开盘就在 PancakeSwap Infinity 的真池子里交易（没有曲线、没有毕业迁移），计价币 WBNB 或币股；可选带引荐人（`FEAST_REFERRER`）；
 - 用币安 **Agentic Wallet CLI（`baw`）** 下单：签名在币安那边完成，本地**不保存私钥**；
 - 浏览器界面（`http://127.0.0.1:<PORT>`），单人使用。
 
@@ -125,6 +126,7 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 | `OPENFOUR_SCRIPT` | （自动查找） | Four 技能脚本路径 |
 | `AUTH_SIMULATE_LOGGED_OUT` | `0` | 调试：假装未登录 |
 | `DATA_DIR` | `data/` | 数据目录（多钱包时每个后端各用一个） |
+| `FEAST_REFERRER` | （空） | Feast 引荐人地址（可选）：每笔 Feast 买卖带上它，这笔 1% 手续费里的引荐份额（发币人定，默认成交额的 0.1%）链上记到该地址；钱包首次带引荐人成交会终身绑定 |
 | `WALLET_SLOT` / `WALLET_PEERS` | `1` / `[]` | 多钱包：本后端是第几个钱包 / 一起下单的其他钱包后端 |
 | `WALLET_ADDRESS` | （空） | 本后端只允许这个钱包地址；baw 登录成别的账号时拒绝使用（防止拿错账号下单） |
 | `MYSQL_URL` | （空） | 可选：历史数据缓存的 MySQL，如 `mysql://tmtn:密码@127.0.0.1:13306/tmtn`（只放 `.env`），见 [docs/cache.md](docs/cache.md) |
@@ -165,6 +167,7 @@ engine/
     fourMeme.js openFour.js              Four：链上事件、OpenFour 技能脚本
     gangFun.js gangTrade.js gangV2Pads.js  gang.fun：接口、老盘、V2 盘
     gangChain.js     gang.fun 新盘：监听链上创建事件（WSS 订阅 + getLogs 补查），比接口轮询快
+    feastApi.js feastTrade.js            Feast（feast.meme）：公开接口的币列表 / 元数据；Infinity 真池子买卖（Universal Router 一笔，hookData 带引荐人）
     flapChain.js     Flap Agent 曲线：订阅链上成交 / 新市场事件（代替第三方 shrine 推送）
     portal.js        Flap Portal 买 / 卖 / 领取、发交易并等回执
     liveTrader.js    下单流程、自动领取、单币规则、计价币换回 BNB、授权管理
@@ -292,8 +295,10 @@ curl -s -X POST http://127.0.0.1:8788/api/order -H 'content-type: application/js
 | gang.fun 老盘 | `0x315Ba2e8952D06094CC636b2B84229FA32fb23A7` |
 | gang.fun V2 pads | `0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E`、`0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb`、`0x60aee38576035E757deD30fF8db8A8DA476430C1` |
 | WBNB / BNCB / GANG | `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c` / `0x4902C5ebc598265Ed2212b559B042De8a5Eeec3f` / `0x0c6302401aa5325C2E36F170f52C00B1d220B405` |
+| Feast Factory / Hook / Referrals（feast.meme） | `0x1003b54659F5e31A7391fEBE824A137e8CDa90da` / `0xABFB955e4582f49dc741DCf5354fbB0edaD0A7c5` / `0x01bc8640af92f4E556cB38644bC3DA5f41f253a4` |
+| PancakeSwap Infinity Universal Router / Permit2 / MixedQuoter（Feast 买卖、报价） | `0xd9C500DfF816a1Da21A48A732d3498Bf09dc9AEB` / `0x31c2F6fcFf4F8759b3Bd5Bf0e1084A055615c768` / `0x2dCbF7B985c8C5C931818e4E107bAe8aaC8dAB7C` |
 
-数据源：BSC RPC（bnbchain / publicnode）、gang.fun API、fsi.taxed.fun、shrine.trade、DexScreener、GeckoTerminal、币安行情接口。
+数据源：BSC RPC（bnbchain / publicnode）、gang.fun API、feast.meme API、fsi.taxed.fun、shrine.trade、DexScreener、GeckoTerminal、币安行情接口。
 
 ## 第三方组件
 

@@ -339,6 +339,9 @@ td.addr { color: var(--muted); }
 .plg [data-pp].off { background: transparent !important; outline: 1px solid currentColor; opacity: .45; }
 .pcard.gang { border-left-color: #2ec4b6; background: linear-gradient(90deg, rgba(46, 196, 182, .08), transparent 60%); }
 .pcard.gang .bar i { background: linear-gradient(90deg, #1b998b, #2ec4b6); }
+.pfe, .pcard.feast .pbadge { color: #f6c343; background: rgba(246, 195, 67, .15); }
+.pcard.feast { border-left-color: #f6c343; background: linear-gradient(90deg, rgba(246, 195, 67, .08), transparent 60%); }
+.pcard.feast .bar i { background: linear-gradient(90deg, #c99a2e, #f6c343); }
 .pcard .qb[disabled] { opacity: .5; cursor: not-allowed; }
 .pcard:hover { background-color: #121820; border-color: var(--line2); }
 .pcard.new { animation: flash 1.4s ease-out; }
@@ -416,6 +419,7 @@ td.addr { color: var(--muted); }
 .tcard { display: grid; grid-template-columns: 70px minmax(0, 1fr) 38%; gap: 10px; padding: 8px; min-height: 112px; border-radius: 8px; cursor: pointer; border: 1px solid #1f1a2e; background: #1a1030; font-size: 11px; color: #9ca3af; }
 .tcard.four { background: #0f2226; border-color: #173338; }
 .tcard.gang { background: #0f2226; border-color: #18403c; }
+.tcard.feast { background: #221f0f; border-color: #3d3618; }
 .tcard:hover { filter: brightness(1.15); }
 .tcard.held { box-shadow: inset 0 0 0 1px rgba(240, 185, 11, .7); }
 .tcard.hid { opacity: .45; }
@@ -425,7 +429,7 @@ td.addr { color: var(--muted); }
 .tc-img .logo.tl { width: 64px; height: 64px; font-size: 22px; border-radius: 8px !important; }
 .tc-img .logo.tl img { border-radius: 8px !important; }
 .tc-badge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50% !important; display: grid; place-items: center; font: var(--fw-strong) 9px/1 var(--mono, monospace); font-style: normal; color: #fff; border: 2px solid #0b0b0f; background: #7b3fe4; }
-.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; }
+.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; } .tc-badge.feast { background: #c99a2e; color: #1a1400; }
 .tc-prog { height: 3px; background: #2a2440; border-radius: 2px; overflow: hidden; width: 64px; } .tc-prog i { display: block; height: 100%; background: #0ecb81; }
 .tc-dev { font: 10px var(--mono, monospace); color: #6b7280; width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-m { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -491,6 +495,7 @@ td.addr { color: var(--muted); }
 .tfm-c.pf-flap.on { color: #a571ff; border-color: #a571ff; background: rgba(165,113,255,.12); }
 .tfm-c.pf-four.on { color: #f0b90b; border-color: #f39a3d; background: rgba(243,154,61,.12); }
 .tfm-c.pf-gang.on { color: #2ec4b6; border-color: #2ec4b6; background: rgba(46,196,182,.12); }
+.tfm-c.pf-feast.on { color: #f6c343; border-color: #f6c343; background: rgba(246,195,67,.12); }
 .tfm input:not([type=checkbox]) { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a2f37; background: #1a1d21; color: #e5e7eb; }
 .tfm-row { display: flex; align-items: center; gap: 8px; color: #6b7280; }
 .tfm-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

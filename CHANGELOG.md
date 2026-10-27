@@ -1,5 +1,11 @@
 # Changelog
 
+## 未发布
+
+### 新增
+
+1. **Feast（feast.meme）内盘**：BSC 上的 meme 发射台，币一开盘就在 PancakeSwap Infinity 的真池子里交易（没有曲线、没有毕业迁移），计价币 WBNB 或币股。列表 / 价格 / 24 小时量 / 持有人来自它的公开接口（`/api/v1/pools`、`/api/v1/snapshot`），头像和简介经 `feast.meme/api/ipfs/<cid>`。买卖各是 Universal Router 的一笔 `execute`（baw contract-call），币股池自动经 PancakeSwap v3 换入 / 换出；卖出前按授权策略给 Permit2 授权一次。报价用 MixedQuoter 从钱包地址 eth_call 模拟，下单前先链上模拟。`.env` 里填 `FEAST_REFERRER`（可选）后每笔买卖带上引荐人：这笔 1% 手续费里的引荐份额（发币人定，默认成交额的 0.1%）在链上记到该地址，钱包首次带引荐人成交会终身绑定。战壕 / 持仓筛选加了 Feast。成交流和 K 线这版没接。`npm run test:feast` 用 feast.meme 站点编码器的 fixture 逐字节核对 calldata；`FEAST_LIVE=1` 再跑只读的主网检查。
+
 ## v3.6 — 2026-10-28
 
 升级后需要重启服务（以及第 2 个钱包的容器）才会生效。**v3.5 及更早的版本要手动升级这一次**（`git pull` 或下载 v3.6），之后就可以在页面里在线升级了。

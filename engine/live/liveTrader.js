@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
-import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
+import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET, FEAST_REFERRER } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
 import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL } from './config.js';
 const RULE_FILE = dataFile('tokenRules.json');
@@ -18,6 +18,7 @@ import { V3_TRADE } from './gangV3.js';
 import { fairBuy, fairSell } from './gangFair.js';
 import { FlapNft } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
+import { FeastTrade } from './feastTrade.js';
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken, routeTokens, dexPrice } from './quoteRoutes.js';
 // 一键全部换回 BNB：价值低于这个美元数的零头跳过（不值 gas）。QUOTE_SWEEP_MIN_USD 可调
@@ -49,6 +50,7 @@ export class LiveTrader extends EventEmitter {
     this.flapNft = new FlapNft(market.tradeProvider || market.provider, (o) => this.portal.send(o));   // Flap Portal Agent ID 门槛盘（登记表和行情共用 market.flapNft）
     this.flapNft.reg = market.flapNft?.reg || this.flapNft.reg;
     this.dex = new DexDirect(market.tradeProvider || market.provider, (o) => this.portal.send(o), this.gangV2);   // 刚发射、币安聚合还没收录新池子时直连 PancakeSwap V2
+    this.feast = new FeastTrade(market.tradeProvider || market.provider, (o) => this.portal.send(o));   // Feast（feast.meme）：Infinity 真池子，买卖各一笔 router.execute（baw contract-call）
     this.wallets = [];
     this.positions = new Map();
     this.orders = [];
@@ -343,12 +345,15 @@ export class LiveTrader extends EventEmitter {
   useOpenFour(t) { return t.source === 'four-agent' && this.onCurve(t); }
   // Flap 普通 Portal 的 Agent ID 门槛盘：内盘时直接调 Portal.swapExactInput（tx.origin 必须持有门槛 NFT；币安聚合不保证打到内盘）
   useFlapNft(t) { return t.source === 'flap-nft' && this.onCurve(t); }
+  // Feast（feast.meme）：真池子，没有曲线也没有迁移，始终直接走 Universal Router
+  useFeast(t) { return t.source === 'feast'; }
   // 下单前的门槛检查：钱包没有门槛 NFT → 返回「跳过」原因（不发交易）；能交易 / 不是门槛盘 → null
   async nftBlock(t, w) { return this.useFlapNft(t) && w?.address ? this.flapNft.block(t.address, w.address).catch(() => null) : null; }
 
   usePortal(t, side) { return t.source === 'agent-curve' && t.market && this.onCurve(t) && (side === 'buy' || !DRY_RUN); }
 
   route(t, side) {
+    if (this.useFeast(t)) return `Feast 真池子 · Universal Router ${side === 'buy' ? (t.quote === 'BNB' ? 'BNB→代币' : `BNB→${t.quote}→代币`) : (t.quote === 'BNB' ? '代币→BNB' : `代币→${t.quote}→BNB`)}（一笔完成）· baw contract-call${FEAST_REFERRER ? ' · 带引荐人' : ''}`;
     if (this.useGang(t)) return `Gang 内盘 · ${side === 'buy' ? 'buy' : 'sell'}（BNB，一笔完成）· baw contract-call（每个钱包最多买总量 1%）`;
     if (this.fairMinting(t)) return side === 'buy' ? 'Gang 打新认购 · GangRouter.fairMintBNB（固定价，每地址有上限，多余 BNB 退回）· baw contract-call' : 'Gang 打新退出 · pad.withdraw（按打新价，扣撤出费，收 WBNB）· baw contract-call';
     if (this.useGangV2(t) && t.gangTrack !== 'v2') return `Gang V3 内盘 · ${side === 'buy' ? `BNB→${t.quote}→buy` : `sell→${t.quote}→BNB`}（和 V2 同一套，非原子）${V3_TRADE ? '' : ' · 只报价（GANG_V3_TRADE 未开启）'}`;
@@ -363,6 +368,7 @@ export class LiveTrader extends EventEmitter {
   // 链上确认是否已发射（迁移）到 PancakeSwap：Gang V2 看曲线的 graduated；其他平台看 PancakeSwap V2 上有没有带储备的池子。
   // 只在内盘报价 / 下单失败后调用。确认了就记 t.migrated 并把状态改成外盘，后面的报价、下单直接走外盘
   async checkMigrated(t) {
+    if (t.source === 'feast') return false;   // Feast 没有迁移这回事：真池子一直在
     const yes = t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3') ? !!(await this.gangV2.curve(t.address)).c.graduated
       : t.source === 'flap-nft' ? (await this.flapNft.state(t.address)).status === 4 : !!(await this.dex.pool(t.address, t.quoteAddress));
     if (yes && !t.migrated) { t.migrated = true; t.stage = 'dex'; t.progress = 100; this.quoteCache.clear(); this.market.emit('migrate', this.market.summary(t)); }
@@ -423,6 +429,16 @@ export class LiveTrader extends EventEmitter {
         const q = await this.portal.quoteBuy(t.market, w.address, ethers.parseUnits(quoteOut.toFixed(12), 18));
         const out = +ethers.formatEther(q.shares);
         v = { ...base, amountIn: +amount, out, minOut: out * (1 - slippage / 100), quoteOut, feeQuote: +ethers.formatEther(q.fee), feePct: quoteOut ? (+ethers.formatEther(q.fee) / quoteOut) * 100 : null };
+      } else if (this.useFeast(t)) {
+        if (side === 'buy') {
+          const q = await this.feast.quoteBuy(t.address, w.address, trim(amount));
+          v = { ...base, amountIn: +amount, out: q.outNum, minOut: q.outNum * (1 - slippage / 100), feeBnb: q.feeBnb, feePct: 1, note: q.out === 0n ? '报价为 0：可能还没开盘，或开盘头几块每个钱包的上限已满' : null };
+        } else {
+          const bal = await this.feast.balance(t.address, w.address); const amt = (bal * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
+          if (amt <= 0n) return { ...base, note: '没有可卖出的余额' };
+          const q = await this.feast.quoteSell(t.address, w.address, amt);
+          v = { ...base, amountIn: Number(ethers.formatEther(amt)), out: q.outNum, minOut: q.outNum * (1 - slippage / 100), feeBnb: null, feePct: 1 };
+        }
       } else if (this.useFlapNft(t)) {
         const nb = await this.nftBlock(t, w);
         if (side === 'buy') {
@@ -846,7 +862,8 @@ export class LiveTrader extends EventEmitter {
           if ((w.bnb || 0) < amt) throw new Error(`已用 ${f.symbol} 换出 BNB，但余额 ${(w.bnb || 0).toFixed(4)} 仍不够 ${amt}，没有买入（换出的 BNB 留在钱包）`);
         }
       }
-      r = this.fairMinting(t) ? await fairBuy({ provider: this.market.provider, contractCall: baw.contractCall, wallet: w.address, token: t.address, amountBnb: trim(amt), step }).catch((e) => { if (/开盘/.test(e.message)) { t._fairAt = 0; this.market.gangFairState?.(t).catch(() => {}); } throw e; })   // 刚打满开盘、行情还没切：马上刷新，下一次就走外盘
+      r = this.useFeast(t) ? await this.feast.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
+        : this.fairMinting(t) ? await fairBuy({ provider: this.market.provider, contractCall: baw.contractCall, wallet: w.address, token: t.address, amountBnb: trim(amt), step }).catch((e) => { if (/开盘/.test(e.message)) { t._fairAt = 0; this.market.gangFairState?.(t).catch(() => {}); } throw e; })   // 刚打满开盘、行情还没切：马上刷新，下一次就走外盘
         : this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
@@ -861,7 +878,9 @@ export class LiveTrader extends EventEmitter {
     } else {
       const pct = Math.min(100, order.amount);
       if (this.status.auth.state !== 'ok') throw new Error('币安钱包未登录，请在终端运行 baw auth signin');
-      if (this.fairMinting(t)) {
+      if (this.useFeast(t)) {
+        r = await this.feast.sell({ wallet: w.address, token: t.address, pct, slippage, step });
+      } else if (this.fairMinting(t)) {
         r = await fairSell({ provider: this.market.provider, contractCall: baw.contractCall, wallet: w.address, token: t.address, pct, step });
       } else if (this.useGangV2(t)) {
         r = await this.gangV2.sell({ wallet: w.address, token: t.address, pct, slippage, step, toBnb: this.settings.sellToBnb });
