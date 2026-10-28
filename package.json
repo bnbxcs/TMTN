@@ -1,6 +1,6 @@
 {
   "name": "tmtn",
-  "version": "4.41.0",
+  "version": "4.42.0",
   "description": "本地运行的 BSC Agent 内盘快速买卖终端（Flap / Four / gang.fun），通过币安 Agentic Wallet（baw）下单；默认模拟盘",
   "main": "server.js",
   "type": "module",
