@@ -979,21 +979,33 @@ export class LiveMarket extends EventEmitter {
     if (!has()) await Promise.race([run, new Promise((r) => setTimeout(r, 2500))]);
     if (has()) this.applyDex(t); else await this.dexCandles(t);
   }
+  // 池子的报价币不是币的报价币（如 BNCB 盘只找到 WBNB 池）：外盘价格 / 金额乘这个数换成币的报价币单位，和内盘 K 线同一单位（以前直接混用，接口处是巨大的影线）。0 = 报价币价格还没拿到
+  dexScale(t) {
+    const pq = t.dexInfo?.quote, own = String(t.quoteAddress || '').toLowerCase();
+    if (!pq || pq === own || !own || own === ethers.ZeroAddress || own === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c') return 1;
+    const b = this.quoteUsd(t); return this.bnbUsd > 0 && b > 0 ? this.bnbUsd / b : 0;
+  }
   applyDex(t) {
-    const s = t.dexSwaps || [], bars = dexBars(s, t.dexHist || []); if (!bars.length) return;
+    const k = this.dexScale(t); if (!k) return;   // 换算不了就等下一轮，不先画错单位的
+    const s = k === 1 ? t.dexSwaps || [] : (t.dexSwaps || []).map((x) => ({ ...x, price: x.price * k, bnb: x.bnb * k }));
+    const hist = k === 1 ? t.dexHist || [] : (t.dexHist || []).map((c) => ({ ...c, o: c.o * k, h: c.h * k, l: c.l * k, c: c.c * k, v: c.v * k }));
+    const bars = dexBars(s, hist); if (!bars.length) return;
     const q = this.quoteUsd(t); this.joinDex(t, bars);
     const last = s[s.length - 1]; t.price = last ? last.price : bars[bars.length - 1].c; if (last) t.lastTradeAt = Math.max(t.lastTradeAt || 0, last.ts);
-    if (q) { t.mcapUsd = t.dexMcapUsd = t.price * (t.maxSupply || 1e9) * q; if (t.dexQuoteRes) t.dexLiqUsd = t.dexQuoteRes * 2 * q; }
+    if (q) { t.mcapUsd = t.dexMcapUsd = t.price * (t.maxSupply || 1e9) * q; if (t.dexQuoteRes) t.dexLiqUsd = t.dexQuoteRes * k * 2 * q; }
     const day = Date.now() - 86_400_000; let v = 0, nb = 0, ns = 0;
     for (let k = s.length - 1; k >= 0 && s[k].ts >= day; k--) { v += s[k].bnb; if (s[k].side === 'buy') nb++; else ns++; }
-    const from = s.length ? s[0].ts / 1000 : Infinity; for (const c of t.dexHist || []) if (c.t * 1000 >= day && c.t < Math.floor(from / 60) * 60) v += c.v;   // 链上读不到的更早部分用 GeckoTerminal 分钟线的成交量
+    const from = s.length ? s[0].ts / 1000 : Infinity; for (const c of hist) if (c.t * 1000 >= day && c.t < Math.floor(from / 60) * 60) v += c.v;   // 链上读不到的更早部分用 GeckoTerminal 分钟线的成交量
     Object.assign(t, { dexVol24: v, dexBuys24: nb, dexSells24: ns, dexCountMin: s.length ? Math.max(1, Math.round((Date.now() - Math.max(day, s[0].ts)) / 60_000)) : 0 });   // 买卖笔数只有链上读到的这段（约 1 小时）
     const recent = s.slice(-100).reverse().map((x) => ({ ...x, usd: x.bnb * q, mcapUsd: x.price * (t.maxSupply || 1e9) * q, name: x.trader ? this.names.peek(x.trader) : null }));
     t.trades = [...recent, ...t.trades.filter((x) => !x.dex)].sort((a, b) => b.ts - a.ts).slice(0, 100);
   }
   // 内盘 K 线 + 外盘 K 线接成一条：内盘的全部保留（只换掉上次接上的外盘部分）
   joinDex(t, bars) {
-    const curve = (t.candles || []).filter((c) => !c.dex), end = curve.length ? curve[curve.length - 1].t : -Infinity;
+    // 内盘只认迁移之前的：迁移以后还记成内盘的 K 线（实时成交、轮询价格补的点）会把「内盘结束」推到现在，整段外盘被压成接口处的一根巨大影线，中间看着像断了。
+    // 截止时间 = 迁移时间 + 2 分钟和外盘第一根 K 线 + 1 分钟里早的那个（记下的迁移时间常是发现迁移的时间，会晚几十分钟）
+    const cut = Math.min(t.migratedAt > 0 ? t.migratedAt / 1000 + 120 : Infinity, bars.length ? bars[0].t + 60 : Infinity);
+    const curve = (t.candles || []).filter((c) => !c.dex && c.t <= cut), end = curve.length ? curve[curve.length - 1].t : -Infinity;
     // 外盘第一根分钟线的起点（如 06:40:00）常早于内盘最后一笔（06:40:43）：以前把这一分钟里的内盘成交整段删掉，K 线在毕业处断开一截。
     // 现在内盘全部保留，落在内盘结束之前的外盘线并成一根，放在内盘最后一笔之后
     const head = bars.filter((c) => c.t <= end), tail = bars.filter((c) => c.t > end);
