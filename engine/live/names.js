@@ -5,8 +5,14 @@ import { ethers } from 'ethers';
 import { dataFile } from './config.js';
 const FILE = dataFile('names.json');
 const RPCS = (process.env.NAME_RPC || 'https://bsc-rpc.publicnode.com,https://bsc.publicnode.com,https://bsc-dataseed.bnbchain.org').split(',');
-const regs = RPCS.map((u) => new ethers.Contract('0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F', ['function handleOf(address) view returns (string)'],
+const AGENT_ID = '0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F';
+const regs = RPCS.map((u) => new ethers.Contract(AGENT_ID, ['function handleOf(address) view returns (string)'],
   new ethers.JsonRpcProvider(u, 56, { staticNetwork: true })));
+// 排队的地址合并成一次 Multicall3 查 .ai（最多 50 个一批），不再一个地址一次 eth_call
+const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+const MC = new ethers.Interface(['function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[])']);
+const HI = new ethers.Interface(['function handleOf(address) view returns (string)']);
+const BATCH = 50;
 const API = 'https://nameapi.space.id/getName?chainid=56&address=';
 const NEG_TTL = 10 * 60_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,16 +57,39 @@ export class NameCache {
     return { ai, sid, name, aiFailed: !!aiErr, sidFailed: !!sidErr };
   }
 
-  kick() { while (this.running < 2 && this.queue.length) this.worker(); }
+  // 一批地址的 .ai：一次 aggregate3；节点出错就换下一个节点，都失败才抛错
+  async handlesOf(keys) {
+    const data = MC.encodeFunctionData('aggregate3', [keys.map((k) => ({ target: AGENT_ID, allowFailure: true, callData: HI.encodeFunctionData('handleOf', [k]) }))]);
+    let err = null;
+    for (let i = 0; i < regs.length; i++) {
+      try {
+        const raw = await regs[(this.rr++) % regs.length].runner.call({ to: MULTICALL3, data });
+        return MC.decodeFunctionResult('aggregate3', raw)[0].map((r) => { if (!r.success) return null; try { return HI.decodeFunctionResult('handleOf', r.returnData)[0] || null; } catch { return null; } });
+      } catch (e) { err = e; }
+    }
+    throw err;
+  }
+
+  kick() { if (!this.running && this.queue.length) this.worker(); }
   async worker() {
     this.running++;
     while (this.queue.length) {
-      const k = this.queue.pop();
-      try { const name = await this.lookup(k); this.map.set(k, { name, at: Date.now() }); this.stats.asked++; if (name) { this.stats.found++; this.ver++; this.save(); } }
-      catch { setTimeout(() => { this.queued.delete(k); this.peek(k); }, 5000); this.queued.add(k); await sleep(200); continue; }
-      this.queued.delete(k);
       if (this.queue.length > 1000) this.queue.splice(0, this.queue.length - 1000).forEach((x) => this.queued.delete(x));
-      await sleep(120);
+      const keys = this.queue.splice(-BATCH);   // 新排进来的先查（卡片上刚出现的首买 / Dev）
+      let hs;
+      try { hs = await this.handlesOf(keys); }
+      catch { setTimeout(() => { for (const k of keys) { this.queued.delete(k); this.peek(k); } }, 5000); await sleep(200); continue; }
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i]; let name = hs[i] ? hs[i] + '.ai' : null;
+        if (!name) {   // 没有 .ai 再问 SPACE ID 主域名（HTTP 接口，不走节点）；接口出错不记为「没有」，5 秒后重排
+          try { const j = await (await fetch(API + k, { signal: AbortSignal.timeout(8_000) })).json(); name = j?.data?.name || null; }
+          catch { this.queued.delete(k); setTimeout(() => this.peek(k), 5000); continue; }
+          await sleep(60);
+        }
+        this.map.set(k, { name, at: Date.now() }); this.stats.asked++; this.queued.delete(k);
+        if (name) { this.stats.found++; this.ver++; this.save(); }
+      }
+      await sleep(150);
     }
     this.running--;
   }

@@ -335,3 +335,8 @@
 :root[data-theme="calm"] .net-badge.y { color: var(--warn); border-color: rgba(217, 165, 74, .35); background: var(--warn-bg); }
 :root[data-theme="calm"] .net-badge.r { color: var(--r); border-color: var(--r-line); background: var(--r-bg); }
 :root[data-theme="calm"] .botbar .pill { height: 20px; }
+
+/* 战壕里 genius.fun 的币卡底色：洋红深紫 #3d0433；只改 genius，Flap/Four/Gang 保持原平台色；两个主题都用 */
+:root { --card-genius: #3d0433; --card-genius-hover: #47053c; --card-genius-line: #57104a; }
+.pulse.trench .tcard.genius, :root[data-theme="calm"] .pulse.trench .tcard.genius { background: var(--card-genius); border-color: var(--card-genius-line); --dim: #8C7F8C; }
+.pulse.trench .tcard.genius:hover, :root[data-theme="calm"] .pulse.trench .tcard.genius:hover { filter: none; background: var(--card-genius-hover); }

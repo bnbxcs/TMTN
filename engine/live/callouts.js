@@ -3,7 +3,7 @@
 //  - four.meme 代币评论（公开接口，免登录）：CA → tokenId（永久缓存）→ /v1/private/token/comment
 //  - GMGN 官方 OpenAPI（.env GMGN_API_KEY）：没有「按代币查喊单」的接口，只有全链 BSC 喊单流 POST /v1/callout/global（每页 ≤50 条，约 10 分钟）。
 //    （按 call_token 等参数过滤实测无效，官方 CLI 也是只读、不能发喊单）→ 后台每 45 秒拉一次（startGmgnCollector），存盘 data/gmgn-callouts.jsonl
-//    （滚动 7 天、最多 20000 条，重启接着用），再按 call_token 过滤 → 能看到开始收集以后的喊单。
+//    （滚动 7 天、最多 150000 条（约 1.4 万条 / 天），重启接着用；停机留下的空档启动时往回补，最多 400 页 ≈ 1~2 天），再按 call_token 过滤 → 能看到开始收集以后的喊单。
 //  - debot（第三方非公开接口，未获准调用）、flap / gang（没有按代币的评论）暂不支持，返回 sources[x].error 说明。
 // 每个 CA 缓存 45 秒、同一 CA 并发请求合并、单源 8 秒超时、最多缓存 300 个 CA（LRU），某个源失败只标记该源，不影响其他源。
 import crypto from 'node:crypto';
@@ -54,9 +54,9 @@ async function fetchFour(ca) {
 
 // ---------- GMGN 全链喊单流（共享缓冲区） ----------
 const GMGN_HOST = 'https://openapi.gmgn.ai';
-const GMGN_KEEP_MS = 7 * 86400_000, GMGN_KEEP_N = 20000, GMGN_MAX_PAGES = 6, GMGN_EVERY = 45_000;   // 官方限流 20 次 / 窗口，45 秒一次（追历史最多 6 页）远低于此
+const GMGN_KEEP_MS = 7 * 86400_000, GMGN_KEEP_N = 150000, GMGN_MAX_PAGES = 6, GMGN_GAP_PAGES = 400, GMGN_EVERY = 45_000;   // 官方限流 20 次 / 窗口，45 秒一次（追历史最多 6 页）远低于此
 const GMGN_FILE = dataFile('gmgn-callouts.jsonl');
-const gm = { buf: [], seen: new Set(), at: 0, p: null, until: 0, err: '', fileN: 0 };   // buf：新 → 旧；fileN：存盘文件的行数
+const gm = { buf: [], seen: new Set(), at: 0, p: null, until: 0, err: '', fileN: 0, fileSize: 0, idx: null };   // buf：新 → 旧；fileN：存盘文件的行数
 async function gmgnPage(pageToken) {
   const key = env('GMGN_API_KEY', ''); if (!key) throw new Error('没配 GMGN_API_KEY');
   const q = new URLSearchParams({ timestamp: String(Math.floor(Date.now() / 1000)), client_id: crypto.randomUUID() });
@@ -72,19 +72,33 @@ async function gmgnPage(pageToken) {
   return { list: Array.isArray(j.data?.list) ? j.data.list : [], next: typeof j.data?.next_page_token === 'string' ? j.data.next_page_token : '' };
 }
 async function gmgnRefresh() {
-  const fresh = []; let token = '', hitOld = false;
-  for (let i = 0; i < GMGN_MAX_PAGES && !hitOld; i++) {   // 第一次最多往回翻 6 页（约 1 小时），之后翻到见过的那条就停
-    const { list, next } = await gmgnPage(token);
-    for (const x of list) { const id = str(x?.ulid, 40); if (!id) continue; if (gm.seen.has(id)) { hitOld = true; continue; } fresh.push(x); }
-    if (!next || !list.length || !gm.buf.length && i >= 3) break;   // 冷启动只拿 4 页（约 40 分钟），省额度
-    token = next;
-  }
-  const cut = Date.now() - GMGN_KEEP_MS;
+  const fresh = [], cut = Date.now() - GMGN_KEEP_MS; let token = '', hitOld = false, err = null;
+  // 平时翻到见过的那条就停（一般 1 页）；本地有存档但中间有空档（停机）时一直往回补到接上，最多 GMGN_GAP_PAGES 页、每页隔 1.5 秒；
+  // 完全没存档时只拿 4 页（约 40 分钟）。翻页中途出错（限流 / 超时）已拿到的照样存
+  const maxPages = gm.buf.length ? GMGN_GAP_PAGES : 4;
+  try {
+    for (let i = 0; i < maxPages && !hitOld; i++) {
+      if (i >= GMGN_MAX_PAGES) await new Promise((r) => setTimeout(r, 1500));
+      const { list, next } = await gmgnPage(token);
+      for (const x of list) { const id = str(x?.ulid, 40); if (!id) continue; if (gm.seen.has(id)) { hitOld = true; continue; } fresh.push(x); }
+      if (!next || !list.length || list.some((x) => Number(x?.create_time) < cut)) break;
+      token = next;
+    }
+  } catch (e) { err = e; }
   const add = fresh.map(gmgnItem);
-  gm.buf = [...add, ...gm.buf].filter((x) => x.ts >= cut).sort((a, b) => b.ts - a.ts).slice(0, GMGN_KEEP_N);
+  gm.buf = [...add, ...gm.buf].filter((x) => x.ts >= cut).sort((a, b) => b.ts - a.ts).slice(0, GMGN_KEEP_N); gm.idx = null;   // 按时间新 → 旧，超量丢最旧的
   gm.seen = new Set(gm.buf.map((x) => x.id.slice(5)));
-  gm.at = Date.now(); gm.err = '';
   gmgnPersist(add);
+  if (err) throw err;
+  gm.at = Date.now(); gm.err = '';
+}
+// 外部补历史（一次性往回翻页的脚本用）：原始条目 → 去重、并入、存盘，返回新增条数
+export function gmgnIngest(list) {
+  const cut = Date.now() - GMGN_KEEP_MS;
+  const add = (Array.isArray(list) ? list : []).filter((x) => { const id = str(x?.ulid, 40); return id && !gm.seen.has(id) && Number(x.create_time) >= cut && gm.seen.add(id); }).map(gmgnItem);
+  if (!add.length) return 0;
+  gm.buf = [...add, ...gm.buf].sort((a, b) => b.ts - a.ts).slice(0, GMGN_KEEP_N); gm.idx = null;
+  gmgnPersist(add); return add.length;
 }
 // 存盘：新喊单追加一行一条；文件里过期 / 超量的行多于 2000 条时整份重写
 function gmgnPersist(add) {
@@ -92,19 +106,29 @@ function gmgnPersist(add) {
     if (add.length) { fs.appendFileSync(GMGN_FILE, add.map((x) => JSON.stringify(x)).join('\n') + '\n'); gm.fileN += add.length; }
     if (gm.fileN > gm.buf.length + 2000) { const tmp = new URL(GMGN_FILE.href + '.tmp'); fs.writeFileSync(tmp, gm.buf.map((x) => JSON.stringify(x)).join('\n') + (gm.buf.length ? '\n' : '')); fs.renameSync(tmp, GMGN_FILE); gm.fileN = gm.buf.length; }
   } catch (e) { console.warn('[callouts] GMGN 喊单存盘失败', e.message); }
+  gm.fileSize = fileSize();
 }
+const fileSize = () => { try { return fs.statSync(GMGN_FILE).size; } catch { return 0; } };
+// 按代币的索引（buf 一变就作废，下次查询时重建）
+function gmgnByToken(ca) {
+  if (!gm.idx) { gm.idx = new Map(); for (const x of gm.buf) { let a = gm.idx.get(x.token); if (!a) gm.idx.set(x.token, (a = [])); a.push(x); } }
+  return gm.idx.get(ca) || [];
+}
+// 也用于别的进程（补历史脚本）往文件里追加后重新读
 function gmgnLoad() {
   let lines = []; try { lines = fs.readFileSync(GMGN_FILE, 'utf8').split('\n'); } catch { return; }   // 第一次没有文件
   const cut = Date.now() - GMGN_KEEP_MS, byId = new Map();
   for (const l of lines) { if (!l) continue; let x; try { x = JSON.parse(l); } catch { continue; } if (x && typeof x.id === 'string' && x.platform === 'gmgn' && Number(x.ts) >= cut) byId.set(x.id, x); }
-  gm.buf = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, GMGN_KEEP_N);
-  gm.seen = new Set(gm.buf.map((x) => x.id.slice(5))); gm.fileN = lines.filter(Boolean).length;
+  gm.buf = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, GMGN_KEEP_N); gm.idx = null;
+  gm.seen = new Set(gm.buf.map((x) => x.id.slice(5))); gm.fileN = lines.filter(Boolean).length; gm.fileSize = fileSize();
 }
 // 后台收集（server.js 启动时调用，只在主钱包后端跑一份）；.env GMGN_COLLECT=0 关掉，回到「打开喊单栏才拉」
 let gmTimer = null;
 export function startGmgnCollector() {
   if (gmTimer || !env('GMGN_API_KEY', '') || String(env('GMGN_COLLECT', '1')) === '0') return;
-  const tick = () => { if (gm.p || Date.now() < gm.until) return; gm.p = gmgnRefresh().catch((e) => { gm.err = str(e?.name === 'TimeoutError' ? '超时' : e?.message, 120); }).finally(() => { gm.p = null; }); };
+  const tick = () => {
+    if (!gm.p && fileSize() !== gm.fileSize) gmgnLoad();   // 文件被别的进程追加过（补历史）：重新读，不用重启就能看到
+    if (gm.p || Date.now() < gm.until) return; gm.p = gmgnRefresh().catch((e) => { gm.err = str(e?.name === 'TimeoutError' ? '超时' : e?.message, 120); }).finally(() => { gm.p = null; }); };
   gmTimer = setInterval(tick, GMGN_EVERY); gmTimer.unref?.(); tick();
   console.log(`[callouts] GMGN 喊单后台收集已开（每 ${GMGN_EVERY / 1000} 秒，本地已有 ${gm.buf.length} 条）`);
 }
@@ -155,15 +179,15 @@ async function fetchGmgn(ca) {
   if (!env('GMGN_API_KEY', '')) return { items: [], note: '没配 GMGN_API_KEY' };
   if (Date.now() - gm.at > (gmTimer ? 2 * GMGN_EVERY : TTL) && Date.now() >= gm.until) {   // 后台在收集时只在它卡住时补一次
     if (!gm.p) gm.p = gmgnRefresh().catch((e) => { gm.err = str(e?.name === 'TimeoutError' ? '超时' : e?.message, 120); }).finally(() => { gm.p = null; });
-    await gm.p;
+    if (!gm.buf.length) await gm.p;   // 有存档就先用存档回（往回补空档可能要几分钟）
   }
   if (gm.err && !gm.buf.length) throw new Error(gm.err);
-  const oldest = gm.buf.length ? gm.buf[gm.buf.length - 1].ts : 0, mins = oldest ? Math.round((Date.now() - oldest) / 60_000) : 0;
-  const span = mins >= 2880 ? `${Math.floor(mins / 1440)} 天` : mins >= 120 ? `${Math.floor(mins / 60)} 小时` : `${mins} 分钟`;
-  const items = gm.buf.filter((x) => x.token === ca);
+  const oldest = gm.buf.length ? gm.buf[gm.buf.length - 1].ts : 0, od = new Date(oldest || Date.now()), p2 = (n) => String(n).padStart(2, '0');
+  const since = `${p2(od.getMonth() + 1)}-${p2(od.getDate())} ${p2(od.getHours())}:${p2(od.getMinutes())}`;   // 本机时间
+  const items = gmgnByToken(ca);
   const hs = [...new Set(items.filter((x) => !x.avatar && x.xh).map((x) => x.xh))].slice(0, 40), got = {};
   await Promise.all(hs.map(async (h) => { got[h] = await xAvatar(h).catch(() => ''); }));
-  return { items: items.map(({ token, xh, ...x }) => (!x.avatar && xh && got[xh] ? { ...x, avatar: got[xh] } : x)), note: `${gmTimer ? `已收集最近 ${span}的全链喊单，更早的看不到` : `只看全链喊单流最近 ${span}`}${gm.err ? '（刷新失败：' + gm.err + '）' : ''}` };
+  return { items: items.map(({ token, xh, ...x }) => (!x.avatar && xh && got[xh] ? { ...x, avatar: got[xh] } : x)), note: `已收集 ${since} 起的全链喊单${gm.err ? '（刷新失败：' + gm.err + '）' : ''}` };
 }
 
 async function load(ca) {

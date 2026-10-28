@@ -76,6 +76,9 @@ if (LIVE) { const q = Number(trader.loadSaved?.().quickBuy); if (q > 0) agent.se
 // 持仓页：链上数量 + baw 钱包历史算成本（只在实盘模式）
 const holdings = LIVE ? new (await import('./engine/live/holdings.js')).Holdings(market, trader) : null;
 market.start();
+// 收藏的币重启后要回到列表（不然顶栏收藏条只剩「—」、点开一片空白，如已迁移的老盘 Gangstar 2026-10-29）：启动 20 秒后逐个上链查一次，之后每 10 分钟补一次被漏掉的
+const favRestore = async () => { if (!LIVE) return; for (const a of Object.keys(favorites.items || {})) if (!market.get(a)) await market.lookup(a).catch(() => null); };
+setTimeout(() => { favRestore(); setInterval(favRestore, 600_000).unref?.(); }, 20_000);
 
 const net = { wss: 302, rpc: 102, detect: 146, detectAt: Date.now() };
 setInterval(() => {
@@ -408,12 +411,17 @@ app.post('/api/wallets', (req, res) => {   // 某个钱包是否「参与下单�
   walletsView().then((v) => { broadcast({ type: 'wallets', data: v }); res.json(v); });
 });
 if (LIVE && WALLET_PEERS.length) setInterval(() => walletsView().then((v) => broadcast({ type: 'wallets', data: v })).catch(() => {}), 10_000);
+// 普通盘总开关（默认关，关着不拉任何普通盘数据）：页面「显示普通盘」任意一列打开时 POST { on: true }，全部关掉时 { on: false }
+app.get('/api/plain-pools', (req, res) => res.json(LIVE ? { on: !!market.plain?.on, plats: market.plain?.onP } : { on: false }));
+app.post('/api/plain-pools', (req, res) => { if (!LIVE) return res.json({ on: false }); const b = req.body || {}; res.json(market.setPlainOn(b.on === true, true, b.plats && typeof b.plats === 'object' ? b.plats : null)); });   // plats = { four, flap, genius }：按平台开
 app.get('/api/lookup/:a', async (req, res) => {
   // 搜索：最多等 1.5 秒（链上查 Four 盘）；查不到 = 不是本终端跟踪的内盘（外盘 / 已毕业 / 其他平台），页面改为打开 GMGN
   const t = LIVE ? await Promise.race([market.lookup(req.params.a).catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]) : (market.get(req.params.a) ? market.summary(market.get(req.params.a)) : null);
   t ? res.json(t) : res.status(404).json({ error: '未找到该代币', external: true });
 });
 app.get('/api/token/:a', async (req, res) => {
+  // 直接打开网址里的合约（重启后不在列表里的老盘 / 已迁移盘）：先按搜索的办法上链查一次收进来，最多等 5 秒（Gangstar 0x6b2c…e694 2026-10-29 页面一片空白）
+  if (LIVE && !market.get(req.params.a) && /^0x[0-9a-fA-F]{40}$/.test(req.params.a)) await Promise.race([market.lookup(req.params.a).catch(() => null), new Promise((r) => setTimeout(r, 5000))]);
   if (LIVE) await market.refresh(req.params.a);
   const d = market.detail(req.params.a); if (!d) return res.status(404).json({ error: '代币不存在' });
   if (LIVE && d.nftGate) d.nftGate = { ...d.nftGate, wallets: await nftHolders(d.nftGate.nft).catch(() => []) };
@@ -600,7 +608,7 @@ const PCT_FAST_BNB = Number(process.env.PCT_FAST_BNB ?? 0.1);
 const PCT_FAST_FLAP_BNB = Number(process.env.PCT_FAST_FLAP_BNB ?? 0.3), PCT_FAST_FLAP_LOW = Number(process.env.PCT_FAST_FLAP_LOW ?? 0.2);
 // 余额（后台缓存，不另查）不够 0.3 + gas 就用 0.2；也不超过交易设置里的单笔上限
 const flapFastBnb = (w) => { const bal = Number(trader.wallet?.(w)?.bnb), cap = Number(trader.status?.maxTradeBnb) || 0; let a = Number.isFinite(bal) && bal > 0 && bal < PCT_FAST_FLAP_BNB + 0.005 ? PCT_FAST_FLAP_LOW : PCT_FAST_FLAP_BNB; if (cap > 0 && a > cap) a = cap; return a; };
-// 市值超过 PCT_FAST_MCAP_USD（默认 $7k）时固定金额买不满：按 市值 × N% ÷ BNB 价 × 1.3 估算要花的 BNB（只看已缓存的市值，不另报价），和固定金额取大的那个，再压到单笔上限和余额（留 gas）。给多了不亏：Gang 按剩余额度只换需要的报价币，Flap 门槛盘多余 BNB 同笔退回，成本按链上实际花的算
+// 市值超过 PCT_FAST_MCAP_USD（默认 $7k）时固定金额买不满：按 市值 × N% ÷ BNB 价 × 1.3 估算要花的 BNB（只看已缓存的市值，不另报价），和固定金额取大的那个，再压到单笔上限和余额（留 gas）。给多了不亏：Gang 按剩余额度只换需要的报价币，Flap 门槛盘多余 BNB 同笔退回，成本按链上实际花的算（市值超过 7k 不要按 0.1）
 const PCT_FAST_MCAP_USD = Number(process.env.PCT_FAST_MCAP_USD ?? 7000);
 const fastByMcap = (w, tk, pct, cap, fixed) => {
   const m = Number(tk?.mcapUsd), u = Number(market.bnbUsd);
@@ -672,6 +680,25 @@ app.post('/api/token-rules', (req, res) => {
     const p = req.body.patch || {}, patch = {};
     if (p.claim !== undefined) patch.claim = p.claim === true;
     res.json(trader.setRule(req.body.token, patch));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// 迁移即清仓（engine/migSell.js）：只在主后端（钱包 1）或模拟盘跑；新建默认关闭，本人用 scripts/mig-sell.mjs 打开（没有页面）
+let migSell = null;
+if (!LIVE || WALLET_SLOT === 1) {
+  const { MigSell } = await import('./engine/migSell.js');
+  const slotsAll = LIVE ? [{ slot: WALLET_SLOT, label: WALLET_LABEL }, ...WALLET_PEERS.map((p) => ({ slot: p.slot, label: p.label || `钱包 ${p.slot}` }))] : [{ slot: WALLET_SLOT, label: '模拟钱包' }];
+  migSell = new MigSell({ market, trader, placeOrder, dataFile, slotsAll, live: LIVE });
+}
+app.get('/api/mig-sell', (req, res) => res.json(migSell ? { rules: migSell.view(), wallets: migSell.slotsAll } : { rules: {}, wallets: [] }));
+app.post('/api/mig-sell', (req, res) => {   // { token, patch: { armed, pct, slippage, slots, rearm } } | { token, remove: true } | { token, test: true }（模拟盘）
+  if (!migSell) return res.status(400).json({ error: '只有主后端支持迁移清仓' });
+  const b = req.body || {};
+  try {
+    if (b.remove) return res.json(migSell.set(b.token, null));
+    if (b.test) return res.json(migSell.testFire(b.token));
+    const p = b.patch || {}, patch = {};
+    for (const k of ['armed', 'pct', 'slippage', 'slots', 'rearm']) if (p[k] !== undefined) patch[k] = p[k];
+    res.json(migSell.set(b.token, patch));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.get('/api/favorites', (req, res) => res.json(favorites.view()));

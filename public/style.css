@@ -1289,3 +1289,6 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .co-h { white-space: nowrap; min-width: 0; } .co-h > * { flex: none; } .co-h .spacer { flex: 1; }
 .co-chips { overflow-x: auto; scrollbar-width: none; } .co-chips::-webkit-scrollbar { display: none; }
 .co-h #coCnt { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 首买 / Dev 的名字：点击写备注 / 查域名 */
+.wnote { cursor: pointer; } .wnote:hover b, .wnote:hover .wn { text-decoration: underline dotted; }
+.tc-dev .wnote b, .tc-dev .wnote .wn { font-weight: 400; }

@@ -105,7 +105,7 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       coolUntil: this.coolUntil, primaryErr: this.primaryErr, keys: this.nodes.filter((n) => n.nr).map((n) => ({ name: n.name, cooling: n.cool > now, err: n.cool > now ? n.err : null })) };
   }
   order(method) {
-    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && (this.trade || !capped(n.url, method))), warm = pool.filter((n) => n.cool <= now);
+    const now = Date.now(), all0 = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, unb = all0.filter((n) => !(n.ban > now)), pool = unb.length ? unb : all0, ok = pool.filter((n) => n.cool <= now && (this.trade || !capped(n.url, method))), warm = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
     if (method === 'eth_getLogs') { const L = logsUrls(); if (L.length) ok.sort((a, b) => L.includes(b.url) - L.includes(a.url)); }   // getLogs 先发日志 / 归档节点（稳定排序，其余顺序不变）
@@ -153,7 +153,8 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       } catch (e) {
         const body = /monthly quota/i.test(String(e.info?.responseBody || '')) ? '月额度已用完（monthly quota）' : '';   // 429 时 ethers 只给「exceeded maximum retry limit」，原因在响应体里
         const m = (body || String(e.shortMessage || e.message || e)).slice(0, 160); last = e;
-        n.cool = Date.now() + (body ? 3600_000 : /429|limit|quota|exceed|retry/i.test(m) ? (this.trade && !n.nr ? 20_000 : 300_000) : 30_000); n.err = m;   // 交易端：公共节点 429 只冷却 20 秒（多是一阵子，冷却 5 分钟会让交易只剩一两个节点可用）
+        if (/\b403\b|forbidden/i.test(m)) n.ban = Date.now() + 600_000;   // 被封 IP 的节点：10 分钟内连「全都在冷却时挑冷却最快结束的」兜底也不选它
+        n.cool = Date.now() + (body ? 3600_000 : /\b403\b|forbidden/i.test(m) ? 600_000 : /429|limit|quota|exceed|retry/i.test(m) ? (this.trade && !n.nr ? 20_000 : 300_000) : 30_000); n.err = m;   // 403（bsc-dataseed 把本机 IP 封了）冷却 10 分钟，不再每 30 秒白打一次；交易端：公共节点 429 只冷却 20 秒（多是一阵子，冷却 5 分钟会让交易只剩一两个节点可用）
         if (n.nr) { this.primaryErr = m; this.coolUntil = n.cool; }
       }
     }

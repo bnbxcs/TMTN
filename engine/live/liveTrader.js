@@ -531,7 +531,7 @@ export class LiveTrader extends EventEmitter {
       const w = this.wallet(walletId);
       order.route = this.route(t, side); order.wallet = w.label;
       // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）。和钱包锁检查同时查，省一次往返
-      // 战壕 ⚡ 快捷买入不等任何检查：不查 NFT 门槛，钱包锁只用 30 秒内的缓存（过期就后台刷新，不等）
+      // 战壕 ⚡ 快捷买入不等任何检查：不查 NFT 门槛，钱包锁只用 30 秒内的缓存（过期就后台刷新，不等）（快捷买入要最快）
       const quick = via === 'quick' && side === 'buy';
       if (quick && !order.dryRun && !(this.lockState && Date.now() - this.lockState.at < 30_000)) this.lockStatus().catch(() => {});
       const [nb, lock] = quick ? [null, order.dryRun ? null : this.lockState && Date.now() - this.lockState.at < 30_000 ? this.lockState.v : null]
@@ -648,7 +648,7 @@ export class LiveTrader extends EventEmitter {
   async fundingPlan(w, t, amt) {
     if (!(amt > 0)) return null;
     const bnb = w.bnb || 0;
-    // 计价币盘（Gang V2 / Flap 非 BNB 盘）：先看钱包里有没有这个盘的报价币。
+    // 计价币盘（Gang V2 / Flap 非 BNB 盘）：先看钱包里有没有这个盘的报价币（BNCB 盘优先用钱包里的 BNCB，不够再用 BNB 换）。
     // 实际怎么付由 gangV2Pads.buy / portal.buy 决定（够就直接用，不够只换差额），这里只算出来给报价和确认框显示
     const qa = t.quoteAddress && (this.useGangV2(t) || (this.usePortal(t, 'buy') && String(t.quoteAddress).toLowerCase() !== QUOTE_TOKENS.WBNB.toLowerCase())) ? t.quoteAddress : null;
     if (qa) {
@@ -917,7 +917,7 @@ export class LiveTrader extends EventEmitter {
     return order;
   }
 
-  // 买入成交后后台「预先授权」。只在设置里「预先授权」开着时做，额度仍是固定额度、不是无限额：
+  // 买入成交后后台「预先授权」（预先授权默认全部打开）。只在设置里「预先授权」开着时做，额度仍是固定额度、不是无限额：
   // - 卖出：把这次买到的代币授权给卖出要用的合约，额度 = 当前余额 × 1.01（Gang V2/V3 pad、Gang V1 pad、Flap 门槛盘 Portal、OpenFour Core）
   // - 报价币（Gang V2/V3 盘）：剩余额度不到固定额度一半时补到约 2 倍单笔上限
   // 这样第一次卖出 / 下一次买入都不用再等授权。Flap 普通 Portal 卖的是曲线份额、外盘走 baw，都不需要授权。失败只记一笔失败的授权记录，不影响买单。
@@ -1147,6 +1147,7 @@ const trim = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 // 会真实上链的订单来源：页面手动点击（手动），以及本人在页面上关掉「模拟」并启动的跟单任务（跟单 任务名）。
 // 以前只认「手动」，跟单任务传来的「跟单 xxx」被当成自动订单，真实模式的跟单永远只报价、从不下单，也不计次数
 // 2026-10-27 起还有本人在页面上打开、并关掉「模拟」的 Gang 新盘狙击（狙击 Gang，engine/live/sniper.js）
+// 2026-10-29 起还有本人在代币详情里打开的「迁移清仓」规则（engine/migSell.js，主后端转给钱包 2 时来源不变）
 // 另外可以在环境变量 TMTN_EXTRA_SOURCES（逗号分隔，写在 .env 里）放行其他来源：本机脚本带访问令牌调 /api/order 时用。默认为空
 const EXTRA_SOURCES = new Set(String(process.env.TMTN_EXTRA_SOURCES || '').split(',').map((x) => x.trim()).filter(Boolean));
-const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || '')) || s === '狙击 Gang' || EXTRA_SOURCES.has(String(s || ''));
+const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || '')) || s === '狙击 Gang' || s === '迁移清仓' || EXTRA_SOURCES.has(String(s || ''));

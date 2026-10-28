@@ -72,6 +72,11 @@ const whoHtml = (addr, name0, a = 6, b = 4) => {
   if (t) return `<b class="y wn-noted">${esc(name || short(addr, a, b))}</b>`;
   return name ? `<b class="wn">${esc(name)}</b>` : `<span class="mono wn">${short(addr, a, b)}</span>`;
 };
+// 首买 / Dev 等地址的显示名（备注由 whoHtml 优先处理）：.ai / .bnb 域名 > 平台给的名字（推特名等）> 短地址
+const domOf = (addr, ...alt) => (addr && NAMES[String(addr).toLowerCase()]) || alt.find(Boolean) || null;
+// 点名字 = 打开「查域名 / 写备注」弹窗（没域名的地址也能备注）；捕获阶段拦下，不再触发卡片的打开 / 买入
+const wnoteHtml = (addr, name, a = 4, b = 4) => addr ? `<span class="wnote" data-wnote="${esc(addr)}" title="${esc(addr)} · 点击写备注 / 查域名">${whoHtml(addr, name, a, b)}</span>` : '';
+document.addEventListener('click', (e) => { const el = e.target.closest('[data-wnote]'); if (!el) return; e.preventDefault(); e.stopPropagation(); walletLookup(el.dataset.wnote); }, true);
 // 地址 / 域名：点击在新标签打开 GMGN 的地址页（点行的其他地方仍打开盈亏抽屉）
 const gmgnWho = (addr, name, a = 6, b = 4) => /^0x[0-9a-fA-F]{40}$/.test(addr || '') ? `<a class="gm-addr" data-gmgn href="https://gmgn.ai/bsc/address/${esc(addr)}" target="_blank" rel="noopener noreferrer" title="在 GMGN 查看 ${esc(addr)}">${whoHtml(addr, name, a, b)}</a>` : whoHtml(addr, name, a, b);
 document.addEventListener('click', (e) => { if (e.target.closest('a[data-gmgn]')) e.stopPropagation(); }, true);   /* 只打开链接，不再触发行点击 */
@@ -178,6 +183,10 @@ const tagsHtml = (t) => {
   const st = t.stage === 'curve' ? '<i class="tag b">内盘</i>' : t.stage === 'dex' ? '<i class="tag g">已迁移</i>' : '<i class="tag gray">已撤池</i>';
   const kind = t.platform === 'four' ? (t.agentExclusive !== false ? '<i class="tag r">Agent 专属</i>' : '<i class="tag r">Four 内盘</i>')
     : t.platform === 'gang' ? gangKind(t)
+    : t.platform === 'genius' || t.launchPlat === 'genius' ? `<i class="tag p">genius.fun${t.stage === 'dex' ? ' · Infinity 池' : ' 内盘'}</i>`
+    : t.launchPlat === 'four' ? '<i class="tag r">Four 普通盘</i>'
+    : t.source === 'dex' ? '<i class="tag p">外盘代币</i>'
+    : t.source === 'flap-plain' || t.nftGate?.plain || /普通盘/.test(t.preset || '') ? '<i class="tag p">Flap 普通盘</i>'
     : (t.source && t.source !== 'agent-curve' ? '<i class="tag p">Flap 内盘</i>' : '<i class="tag p">Agent 曲线</i>');
   return st + kind + `<i class="tag y">${esc(t.quote)} 池</i>` + nftChip(t) + taxChip(t) + divChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
 };
@@ -569,7 +578,7 @@ function renderTop() {
   const rn = S.net.rpcNode;
   if (LIVE() && rn) {
     $('#rpcName').innerHTML = rn.fallback ? `<span class="y">备用: ${esc(rn.active)}</span>` : esc(rn.active);
-    $('#rpcName').closest('.pill').title = `交易 / 查确认：${rn.active}${rn.fallback ? `（NodeReal 不可用，暂用备用节点${rn.primaryErr ? '：' + rn.primaryErr : ''}）` : ''}${(rn.keys || []).length > 1 ? '\nNodeReal key：' + rn.keys.map((k) => `${k.name}${k.cooling ? '（冷却中）' : ' 正常'}`).join('，') : ''}\n行情 / 持仓读取：${rn.read || '—'}\n新盘订阅：Four ${rn.fourWs || '—'}，Gang ${rn.gangWs || '—'}\nFlap 曲线数据：${rn.curve || '—'}`;
+    $('#rpcName').closest('.pill').title = `交易 / 查确认：${rn.active}${rn.fallback ? `（NodeReal 不可用，暂用备用节点${rn.primaryErr ? '：' + rn.primaryErr : ''}）` : ''}${(rn.keys || []).length > 1 ? '\nNodeReal key：' + rn.keys.map((k) => `${k.name}${k.cooling ? '（冷却中）' : ' 正常'}`).join('，') : ''}\n行情 / 持仓读取：${rn.read || '—'}${S.net.readError ? `（公共节点限流中：${S.net.readError}）` : ''}\n新盘订阅：Four ${rn.fourWs || '—'}，Gang ${rn.gangWs || '—'}\nFlap 曲线数据：${rn.curve || '—'}`;
   } else $('#rpcName').textContent = LIVE() ? '…' : '48 Club';
   const mb = $('#modeBadge');
   mb.textContent = REAL() ? '实盘 · 真实下单' : LIVE() ? '实盘行情 · 只报价' : '模拟盘';
@@ -748,7 +757,7 @@ function renderHead() {
       ${logoHtml(t, 'lg')}
       <div class="th-main">
         <div class="th-title">${favStar(t.address)}<b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span class="muted">${esc(t.name)}</span>` : ''}${tagsHtml(t)}</div>
-        <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
+        <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${wnoteHtml(t.creator, domOf(t.creator, t.creatorDomain, t.creatorName), 6, 4)}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
         <div class="th-sub"><span>预设 ${esc(t.preset || '')}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
       <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : t.platform === 'dex' ? 'DexScreener' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}</div>${ruleBanner(t.address)}
@@ -2445,14 +2454,26 @@ const PLATS = ['flap', 'four', 'gang', 'genius'];
 const platOf = (t) => { const p = t.launchPlat || t.platform; return p === 'four' || p === 'gang' || p === 'genius' ? p : 'flap'; };   // launchPlat：自动收录的 Four 普通盘（后端按外盘代币交易）也算 Four
 // 普通盘 = 不是 Agent 盘（Gang 全是 Agent 盘）：Four / Flap / genius 的普通内盘、自动收录的已开盘普通盘。筛选里「显示普通盘」可以关掉
 const isPlainPool = (t) => !t.agentExclusive && platOf(t) !== 'gang';
+// 战壕分类：平台 × Agent / 普通盘，Gang 按版本。筛选里按分类选；新创建 / 即将打满里选了某个平台的「普通盘」，服务端才拉那个平台的内盘普通盘
+const CATS = [['flap-plain', 'Flap 普通盘'], ['flap-agent', 'Flap Agent'], ['four-plain', 'Four 普通盘'], ['four-agent', 'Four Agent'], ['gang-v1', 'Gang V1'], ['gang-v2', 'Gang V2'], ['gang-v3', 'Gang V3'], ['genius-plain', 'Genius 普通盘']];
+const CAT_KEYS = CATS.map((c) => c[0]), CAT_NAME = Object.fromEntries(CATS);
+const catOf = (t) => { const p = platOf(t); return p === 'gang' ? 'gang-' + gangV(t) : p === 'genius' ? 'genius-plain' : p + (isPlainPool(t) ? '-plain' : '-agent'); };
+const defCats = (k) => (k === 'dex' ? [...CAT_KEYS] : CAT_KEYS.filter((c) => !c.endsWith('-plain')));   // 内盘两列默认不要普通盘（不拉数据），已开盘全要
+// 旧预设（平台 + Gang 版本 + 显示普通盘）换算成分类
+const catsFromOld = (f) => CAT_KEYS.filter((c) => { const [p, v] = c.split('-'); if (!(f.plats || PLATS).includes(p)) return false; if (p === 'gang') return !f.gangVers?.length || f.gangVers.includes(v); return v === 'agent' || f.plain === true; });
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
-const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gangVers: [], plain: true } });
+const defPreset = (k) => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gangVers: [], plain: k === 'dex', cats: defCats(k) } });   // plain：显示普通盘，默认关（关着服务端也不拉普通盘数据）
 const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
-  for (const k of Object.keys(TCOLS)) st.cols[k] = { preset: 1, presets: { 1: defPreset(), 2: defPreset(), 3: defPreset() }, q: '', sound: false, sort: 'pct', showHidden: false, ...(st.cols[k] || {}) };
+  for (const k of Object.keys(TCOLS)) st.cols[k] = { preset: 1, presets: { 1: defPreset(k), 2: defPreset(k), 3: defPreset(k) }, q: '', sound: false, sort: 'pct', showHidden: false, ...(st.cols[k] || {}) };
   // 新增 genius.fun 平台：旧存档里原本三个平台全选的预设，自动把 genius 也选上（只选了部分平台的不动）
   if (!st.platGenius) { for (const k of Object.keys(TCOLS)) for (const p of Object.values(st.cols[k].presets || {})) if (p?.f?.plats && ['flap', 'four', 'gang'].every((x) => p.f.plats.includes(x)) && !p.f.plats.includes('genius')) p.f.plats.push('genius'); st.platGenius = true; try { localStorage.setItem('trench', JSON.stringify(st)); } catch { /* ignore */ } }
+  // 普通盘改成默认关：之前存档里默认打开的，统一关掉一次（要看再在筛选里打开）
+  // 已开盘列的普通盘（迁移后的 Flap / Four / genius）服务端一直收录，默认显示；新创建 / 即将打满仍默认关
+  if (!st.catsV1) { for (const k of Object.keys(TCOLS)) for (const p of Object.values(st.cols[k].presets || {})) if (p?.f && !Array.isArray(p.f.cats)) p.f.cats = catsFromOld({ ...p.f, plain: k === 'dex' ? true : p.f.plain }); st.catsV1 = true; st.plainDex = true; st.plainOff = true; try { localStorage.setItem('trench', JSON.stringify(st)); } catch { /* ignore */ } }
+  if (!st.plainDex) { for (const p of Object.values(st.cols.dex?.presets || {})) if (p?.f) p.f.plain = true; st.plainDex = true; st.plainOff = true; try { localStorage.setItem('trench', JSON.stringify(st)); } catch { /* ignore */ } }
+  if (!st.plainOff) { for (const k of Object.keys(TCOLS)) for (const p of Object.values(st.cols[k].presets || {})) if (p?.f) p.f.plain = false; st.plainOff = true; try { localStorage.setItem('trench', JSON.stringify(st)); } catch { /* ignore */ } }
   // 市值筛选改成以 K（千美元）为单位：旧存档里是美元，除以 1000 换算一次
   if (!st.mcUnitK) {
     const toK = (v) => { const x = Number(v); return v === '' || v == null || !isFinite(x) ? v : String(+(x / 1000).toFixed(6)); };
@@ -2461,7 +2482,16 @@ const TR = (() => {
   }
   return st;
 })();
-const trSave = () => { try { localStorage.setItem('trench', JSON.stringify(TR)); } catch { /* ignore */ } };
+const trSave = () => { try { localStorage.setItem('trench', JSON.stringify(TR)); } catch { /* ignore */ } plainSync(); };
+// 普通盘开关同步到服务端：任意一列当前预设打开了「显示普通盘」才让服务端拉普通盘数据，全部关掉就停
+let plainSent = null;
+function plainSync() {
+  // 新创建 / 即将打满当前预设里选了哪些平台的「普通盘」，服务端只拉这些平台的内盘普通盘（已开盘列不用拉，一直收录）
+  const want = {}; for (const p of ['flap', 'four', 'genius']) want[p] = ['new', 'soon'].some((k) => (TR.cols[k].presets[TR.cols[k].preset]?.f?.cats || []).includes(p + '-plain'));
+  const key = JSON.stringify(want); if (key === plainSent) return; plainSent = key;
+  fetch('/api/plain-pools', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: Object.values(want).some(Boolean), plats: want }) }).catch(() => { plainSent = null; });
+}
+setTimeout(plainSync, 1500);
 const P = (k) => TR.cols[k].presets[TR.cols[k].preset];
 // 市值输入以 K（千美元）为单位：「5」「5k」= $5K，「1.2m」= $1.2M，全角数字也认；返回美元，解析不了当作不限
 const mcK = (v) => { if (v === '' || v == null) return null; const s = String(v).replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim().toLowerCase(); const x = parseFloat(s.replace(/[^\d.]/g, '')); return isFinite(x) ? x * (/m/.test(s) ? 1e6 : 1e3) : null; };
@@ -2524,13 +2554,11 @@ function tcHead(k) {
       <button class="tc-ic tc-funnel ${active ? 'act' : ''}" data-tf="${k}" title="${esc(tcFilterSummary(k))}"><svg viewBox="0 0 16 16" width="15" height="15" style="pointer-events:none"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
     </span></div>`;
 }
-function tcActive(k) { const f = P(k).f; return !!(f.plain === false || f.plats.length < PLATS.length || f.gangVers?.length || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
+function tcActive(k) { const f = P(k).f; return !!(String(f.cats || '') !== String(defCats(k)) || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
 // 漏斗按钮的提示文字：当前预设下生效的筛选条件
 function tcFilterSummary(k) {
   const f = P(k).f, x = [];
-  if (f.plain === false) x.push('隐藏普通盘');
-  if (f.plats.length < PLATS.length) x.push('平台 ' + f.plats.join('/'));
-  if (f.gangVers?.length) x.push('Gang ' + f.gangVers.map((v) => v.toUpperCase()).join('/'));
+  if (String(f.cats || '') !== String(CAT_KEYS)) x.push('分类 ' + (f.cats || []).map((c) => CAT_NAME[c]).join('/'));
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
   if (f.hideTax2c) x.push('隐藏 dev 吃税');
@@ -2545,7 +2573,7 @@ function tcFilterSummary(k) {
 function tcFilterPop(k) {
   const f = P(k).f;
   return `<div class="tc-pop" data-tpop="${k}">
-    <div class="tp-row"><span>平台</span>${PLATS.map((p) => `<label><input type="checkbox" data-tfp="${k}:${p}" ${f.plats.includes(p) ? 'checked' : ''}/>${{ flap: 'Flap', four: 'Four', gang: 'Gang', genius: 'Genius' }[p]}</label>`).join('')}<label title="普通盘 = 不是 Agent 专属的盘（Four / Flap / genius 的普通内盘和已开盘的普通盘）"><input type="checkbox" data-tfn="${k}" ${f.plain !== false ? 'checked' : ''}/>显示普通盘</label></div>
+    <div class="tp-row"><span>平台</span>${PLATS.map((p) => `<label><input type="checkbox" data-tfp="${k}:${p}" ${f.plats.includes(p) ? 'checked' : ''}/>${{ flap: 'Flap', four: 'Four', gang: 'Gang', genius: 'Genius' }[p]}</label>`).join('')}<label title="普通盘 = 不是 Agent 专属的盘（Four / Flap / genius 的普通内盘和已开盘的普通盘）"><input type="checkbox" data-tfn="${k}" ${f.plain === true ? 'checked' : ''}/>显示普通盘</label></div>
     <div class="tp-row"><span>市值（K$）</span><input data-tff="${k}:minMc" value="${f.minMc}" placeholder="最低，如 5"/><input data-tff="${k}:maxMc" value="${f.maxMc}" placeholder="最高，如 50"/></div>
     <div class="tp-row"><span>持有人 ≥</span><input data-tff="${k}:minHolders" value="${f.minHolders}"/><span>进度 ≥ %</span><input data-tff="${k}:minProg" value="${f.minProg}"/></div>
     <div class="tp-row"><span>报价币</span><input data-tff="${k}:quote" value="${esc(f.quote)}" placeholder="BNB, BNCB…"/><label><input type="checkbox" data-tfs="${k}" ${f.social ? 'checked' : ''}/>有社交链接</label></div>
@@ -2555,9 +2583,7 @@ function tcFilterPop(k) {
 
 function tcMatch(k, t) {
   const c = TR.cols[k], f = P(k).f;
-  if (!f.plats.includes(platOf(t))) return false;
-  if (f.plain === false && isPlainPool(t)) return false;
-  if (f.gangVers?.length && platOf(t) === 'gang' && !f.gangVers.includes(gangV(t))) return false;   // Gang 版本：不选 = 全部
+  if (!(f.cats || defCats(k)).includes(catOf(t))) return false;   // 分类：平台 × Agent / 普通盘，Gang 按版本
   if (isBlocked(t)) return false;
   const n = (v) => (v === '' || v == null ? null : Number(v));
   const mcMin = mcK(f.minMc), mcMax = mcK(f.maxMc);
@@ -2591,24 +2617,23 @@ function tcCard(t, k) {
   const plat = platOf(t), curve = t.stage === 'curve', prog = Math.min(100, Number(t.progress) || 0);
   const gangOnly = !!t.viewOnly;   // 只看行情的普通盘（普通 Four 内盘 / genius 内盘）：本终端不能下单
   const st = tcState.get(t.address);
-  const dev = t.creatorName || (t.creator ? short(t.creator, 4, 4) : '');
+  const devName = domOf(t.creator, t.creatorDomain, t.creatorName);
   const fee = t.buyFeePct != null ? t.buyFeePct : t.buyTax;
   const soc = [t.website && ['🌐', t.website], t.twitter && ['𝕏', t.twitter], t.telegram && ['✈', t.telegram]].filter(Boolean)
     .map(([i, u]) => `<a class="soc" href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener" data-ext-link>${i}</a>`).join('');
   // 我的持仓（所有钱包合计，和持仓页同一份数据；还没同步到就用本钱包的订单记录）
   const hr = holdRow(t), myAmt = hr?.amount > 0 ? hr.amount : (S.positions || []).filter((p) => p.token === t.address && p.amount > 0).reduce((a, p) => a + p.amount, 0);
   const hp = myAmt > 0 ? { amount: myAmt, pct: hr?.amount > 0 ? hr.supplyPct : null } : null;
-  const fb = t.firstBuyer ? (t.firstBuyerName || nameOf({ trader: t.firstBuyer }) || short(t.firstBuyer, 4, 4)) : '';
   const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%${fairLeft(t)}` : `${esc(t.quote || 'BNB')} | ${t.gangFair ? '打新已发射 · 外盘' : '已迁移 DEX'}`;
   return `<div class="tcard ${plat} ${hp ? 'held' : ''} " data-pa="${t.address}">
     <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t), genius: 'GN' }[plat]}</i></div>
-      <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}" title="创建者（Dev）：${esc(t.creator || '')}${isMe(t.creator) ? '（我）' : ''}">${esc(dev)}</div></div>
+      <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}">${wnoteHtml(t.creator, devName)}</div></div>
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tc-xs')}</div>
       <div class="tc-chips">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
       <div class="tc-meta">${k === 'dex' && t.migratedAt ? `<span class="g" title="发射于 ${fullTime(t.migratedAt)} · 创建于 ${fullTime(t.createdAt)}">${age(t.migratedAt)}</span>` : `<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>`}${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
-      <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b>${meTag(t.firstBuyer)}` : esc(fb)}` : ''}${hp ? `<span class="y" title="我的钱包持有（不是首买地址）">我持有 ${K(hp.amount)}${hp.pct != null ? ` · ${hp.pct.toFixed(2)}%` : ''}</span>` : ''}</div>
+      <div class="tc-who">${t.firstBuyer ? `<span class="g">👑</span> 首买 ${wnoteHtml(t.firstBuyer, domOf(t.firstBuyer, t.firstBuyerName))}` : ''}${hp ? `<span class="y" title="我的钱包持有（不是首买地址）">我持有 ${K(hp.amount)}${hp.pct != null ? ` · ${hp.pct.toFixed(2)}%` : ''}</span>` : ''}</div>
     </div>
     ${gangOnly ? `<div class="tc-r off" title="普通 Four 内盘 / genius 内盘：本终端暂不支持下单，只看行情"><div class="tc-mc"><span>MC</span> <b>${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div><span class="tc-buy">仅行情</span></div>`
       : `<div class="tc-r buyable ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}"><div class="tc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算的市值' : '市值'}"><span>MC</span> <b class="${curve ? '' : 'cy'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div>
@@ -2753,7 +2778,7 @@ document.addEventListener('click', (e) => {
   else if (d.tsound) { TR.cols[d.tsound].sound = !TR.cols[d.tsound].sound; if (TR.cols[d.tsound].sound) colTone(990); }
   else if (d.tf) { tfModal(d.tf); return; }
   else if (d.tfall) { const src = P(d.tfall).f; setTaxAll(src.maxTax, src.hideUnknownTax, src.hideTax2c); note(`税率条件已应用到三列（P1-P3 都生效）${src.maxTax !== '' ? `：最高 ${src.maxTax}%` : ''}`, 'info'); }
-  else if (d.tfreset) { P(d.tfreset).f = defPreset().f; $('#tcf-' + d.tfreset).innerHTML = tcFilterPop(d.tfreset); }
+  else if (d.tfreset) { P(d.tfreset).f = defPreset(d.tfreset).f; $('#tcf-' + d.tfreset).innerHTML = tcFilterPop(d.tfreset); }
   else if (d.tqb) {
     // 整个右侧框都是买入按钮：点下立刻显示「下单中」，结果按这次点击之后该币的最新买单判断
     const [a, k] = d.tqb.split(':'); if (tcState.get(a) === 'busy') return;
@@ -2823,7 +2848,7 @@ setInterval(() => { if (S.view === 'pulse' && Date.now() - lastPulse > 1000) { r
 function tfModal(k) {
   document.getElementById('tfModal')?.remove();
   const f0 = P(k).f;
-  const dr = { ...defPreset().f, ...JSON.parse(JSON.stringify(f0)) };
+  const dr = { ...defPreset(k).f, ...JSON.parse(JSON.stringify(f0)) };
   const quotes = [...new Set([...S.tokens.values()].map((t) => String(t.quote || '').toUpperCase()).filter(Boolean))].sort();
   const PN = { flap: 'Flap', four: 'Four', gang: 'Gang', genius: 'Genius' };
   const m = document.createElement('div'); m.id = 'tfModal'; m.className = 'tfm-bg';
@@ -2833,11 +2858,8 @@ function tfModal(k) {
     m.innerHTML = `<div class="tfm">
       <div class="tfm-h"><b>筛选 · ${TCOLS[k]} · P${TR.cols[k].preset}</b><button class="tfm-x" data-x>×</button></div>
       <div class="tfm-b">
-        <div class="tfm-s"><div class="tfm-t"><span>平台</span><span><button class="tfm-all" data-gv3only title="平台只留 Gang，版本只留 V3（含 V3 打新）">只看 Gang V3</button> <button class="tfm-all" data-pall>全选</button></span></div>
-          <div class="tfm-chips">${PLATS.map((p) => `<button class="tfm-c pf-${p}${dr.plats.includes(p) ? ' on' : ''}" data-plat="${p}">${PN[p]}</button>`).join('')}</div>
-          <div class="tfm-chips" style="margin-top:6px"><button class="tfm-c${dr.plain !== false ? ' on' : ''}" data-plainsw title="普通盘 = 不是 Agent 专属的盘（Four / Flap / genius 的普通内盘和已开盘的普通盘）。关掉只看 Agent 盘">显示普通盘（非 Agent）</button></div></div>
-        ${dr.plats.includes('gang') ? `<div class="tfm-s"><div class="tfm-t"><span>Gang 版本</span><span class="muted">不选 = 全部</span></div>
-          <div class="tfm-chips">${[['v3', 'V3（含打新）'], ['v2', 'V2'], ['v1', 'V1 老盘']].map(([v, l]) => `<button class="tfm-c pf-gang${(dr.gangVers || []).includes(v) ? ' on' : ''}" data-gv="${v}">${l}</button>`).join('')}</div></div>` : ''}
+        <div class="tfm-s"><div class="tfm-t"><span>分类</span><span><button class="tfm-all" data-gv3only title="只留 Gang V3（含 V3 打新）">只看 Gang V3</button> <button class="tfm-all" data-pall>全选</button></span></div>
+          <div class="tfm-chips">${CATS.map(([c, l]) => `<button class="tfm-c pf-${c.split('-')[0]}${dr.cats.includes(c) ? ' on' : ''}" data-cat="${c}" title="${c.endsWith('-plain') ? (k === 'dex' ? '迁移后的普通盘（非 Agent）' : '内盘阶段的普通盘（非 Agent）：选上后服务端才开始拉这个平台的普通盘数据') : c.startsWith('gang-v3') ? 'Gang V3（含打新）' : ''}">${l}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>报价代币</span><span class="muted">不选 = 全部</span></div>
           <div class="tfm-chips">${quotes.map((q) => `<button class="tfm-c${qs.has(q) ? ' on' : ''}" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>市值（K$）</span><span class="muted">填 5 = $5K</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低，如 5"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高，如 50"/></div></div>
@@ -2858,14 +2880,12 @@ function tfModal(k) {
     if (e.target === m) return close();
     const b = e.target.closest('button'); if (!b) return; const x = b.dataset;
     if (x.x != null) return close();
-    if (x.plat) { const st = new Set(dr.plats); st.has(x.plat) ? (st.size > 1 && st.delete(x.plat)) : st.add(x.plat); dr.plats = PLATS.filter((p) => st.has(p)); }
-    else if (x.pall != null) { dr.plats = [...PLATS]; dr.gangVers = []; }
-    else if (x.plainsw != null) dr.plain = dr.plain === false;
-    else if (x.gv) { const st = new Set(dr.gangVers || []); st.has(x.gv) ? st.delete(x.gv) : st.add(x.gv); dr.gangVers = ['v3', 'v2', 'v1'].filter((v) => st.has(v)); }
-    else if (x.gv3only != null) { dr.plats = ['gang']; dr.gangVers = ['v3']; }
+    if (x.cat) { const st = new Set(dr.cats); st.has(x.cat) ? (st.size > 1 && st.delete(x.cat)) : st.add(x.cat); dr.cats = CAT_KEYS.filter((c) => st.has(c)); }
+    else if (x.pall != null) dr.cats = [...CAT_KEYS];
+    else if (x.gv3only != null) dr.cats = ['gang-v3'];
     else if (x.q) { const st = qset(); st.has(x.q) ? st.delete(x.q) : st.add(x.q); dr.quote = [...st].join(','); }
     else if (x.taxq != null) dr.maxTax = x.taxq;
-    else if (x.reset != null) Object.assign(dr, defPreset().f);
+    else if (x.reset != null) Object.assign(dr, defPreset(k).f);
     else if (x.alltax != null) { setTaxAll(dr.maxTax, dr.hideUnknownTax, dr.hideTax2c); P(k).f = dr; trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); note(`税率条件已应用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : ''}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); return close(); }
     else if (x.ok != null) {
       // 税率条件改了就同时用到三列（只在一列设的话另外两列照常显示，容易以为没生效）
