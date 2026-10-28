@@ -32,13 +32,19 @@ export class Portal {
     this.provider = provider; this.read = readProvider;   // read：定时扫描用的只读调用（领取前模拟、份额），走公共节点
     this.portal = new ethers.Contract(PORTAL, PORTAL_ABI, provider);
     this.factory = new ethers.Contract(FACTORY, ['function marketOfToken(address token) view returns (address)'], provider);
+    this._qBuy = new Map();   // 短 TTL 报价缓存：同 market+wallet+amount 共用（含 in-flight），不跳过滑点
   }
 
   async marketOf(token) { try { const m = await this.factory.marketOfToken(token); return m && m !== ZERO ? m : null; } catch { return null; } }
 
   async quoteBuy(market, wallet, amountWei) {
-    const r = await this.portal.quoteBuy(market, wallet || ZERO, amountWei);
-    return { gross: r[0], fee: r[1], extra: r[2], shares: r[3] };
+    const key = `${String(market).toLowerCase()}|${String(wallet || ZERO).toLowerCase()}|${amountWei.toString()}`;
+    const hit = this._qBuy.get(key);
+    if (hit && Date.now() - hit.at < 1200) return hit.v != null ? hit.v : hit.p;
+    const p = this.portal.quoteBuy(market, wallet || ZERO, amountWei).then((r) => ({ gross: r[0], fee: r[1], extra: r[2], shares: r[3] }));
+    this._qBuy.set(key, { at: Date.now(), p });
+    try { const v = await p; this._qBuy.set(key, { at: Date.now(), v }); return v; }
+    catch (e) { this._qBuy.delete(key); throw e; }
   }
 
   minShares(shares, slippagePct) { const bps = BigInt(Math.min(9999, Math.round(slippagePct * 100))); return (shares * (10000n - bps)) / 10000n; }
@@ -72,14 +78,16 @@ export class Portal {
     return { venue: 'Portal.buy（BNB，原子）', expected: +ethers.formatEther(q.shares), feeBnb: +ethers.formatEther(q.fee), ...r };
   }
 
-  // 发一笔合约调用并等上链；PENDING_CONFIRMATION 时提示去币安 App 确认
-  async send({ wallet, to, valueWei = '0', inputData, label, step }) {
+  // 发一笔合约调用；PENDING_CONFIRMATION 时提示去币安 App 确认。
+  // waitConfirm=true（默认）：同步等回执（授权 / 包装等中间步需要）。false：拿到 hash 即抛 UNCONFIRMED，由 liveTrader.followUp 异步续跑「已上链」
+  async send({ wallet, to, valueWei = '0', inputData, label, step, waitConfirm = true }) {
     const t = Date.now();
     const r = await baw.contractCall({ from: wallet, to, valueWei: String(valueWei), inputData });
     if (r.riskTitles?.length) step(`风险提示：${r.riskTitles.join('；')}`, 0);
     if (r.status === 'PENDING_CONFIRMATION') throw Object.assign(new Error(`${label} 需要在币安 App 里确认（${r.message || 'Please confirm in the Binance App'}），确认或拒绝之前钱包会被锁住`), { code: 'APP_CONFIRM' });
     if (!r.txHash) throw new Error(`${label} 没有返回 txHash（状态 ${r.status || '未知'}）`);
     step(`${label} 已广播 ${r.txHash.slice(0, 10)}…`, Date.now() - t, { tx: r.txHash, stage: 'broadcast' });
+    if (!waitConfirm) throw Object.assign(new Error(`${label} 已广播，后台确认中：${r.txHash}`), { code: 'UNCONFIRMED', tx: r.txHash });
     let rc = null;   // 每 150ms 查一次回执（BSC 出块约 0.75 秒；ethers 默认 4s 轮询太慢）
     for (const end = Date.now() + 180_000; Date.now() < end; await sleep(150)) { rc = await this.provider.getTransactionReceipt(r.txHash).catch(() => null); if (rc) break; }
     // 已经广播但 3 分钟没等到回执：不是失败，交给上层继续盯
@@ -114,7 +122,7 @@ export class Portal {
       const value = ethers.parseEther(String(amountBnb));
       const q = await this.quoteBuy(market, wallet, value);
       step(`Portal.quoteBuy ${(+ethers.formatEther(q.shares)).toFixed(0)} 份`, 0);
-      hashes.push(await this.send({ wallet, to: PORTAL, valueWei: value, inputData: pIface.encodeFunctionData('buy', [market, this.minShares(q.shares, slippage)]), label: 'Portal.buy', step }));
+      hashes.push(await this.send({ wallet, to: PORTAL, valueWei: value, inputData: pIface.encodeFunctionData('buy', [market, this.minShares(q.shares, slippage)]), label: 'Portal.buy', step, waitConfirm: false }));
       return { venue: 'Portal.buy（BNB，原子）', expected: +ethers.formatEther(q.shares), txHash: hashes.at(-1), hashes };
     }
     const qc = new ethers.Contract(quoteAddress, ERC20_ABI, this.provider);
@@ -148,7 +156,7 @@ export class Portal {
     for (const spender of [PORTAL, market]) await this.ensureAllowance({ wallet, token: quoteAddress, spender, amount: got, sym: quoteSym, step });
     const q = await this.quoteBuy(market, wallet, got);
     step(`Portal.quoteBuy ${(+ethers.formatEther(q.shares)).toFixed(0)} 份`, 0);
-    hashes.push(await this.send({ wallet, to: PORTAL, inputData: pIface.encodeFunctionData('buyWithQuote', [market, got, this.minShares(q.shares, slippage)]), label: 'Portal.buyWithQuote', step }));
+    hashes.push(await this.send({ wallet, to: PORTAL, inputData: pIface.encodeFunctionData('buyWithQuote', [market, got, this.minShares(q.shares, slippage)]), label: 'Portal.buyWithQuote', step, waitConfirm: false }));
     return { venue: payQuote != null ? `钱包 ${quoteSym}→Portal.buyWithQuote` : `BNB→${quoteSym}→Portal.buyWithQuote（非原子）`, expected: +ethers.formatEther(q.shares), quoteSpent: +ethers.formatUnits(got, dec), txHash: hashes.at(-1), hashes };
   }
 
@@ -171,7 +179,7 @@ export class Portal {
     const dec = bnbQuote ? 18 : Number(await qc.decimals().catch(() => 18));
     const before = bnbQuote ? 0n : await qc.balanceOf(wallet);
     let hashes;
-    try { hashes = [await this.send({ wallet, to: PORTAL, inputData, label: p >= 100 ? 'Portal.sellAll' : `Portal.sell ${p}%`, step })]; }
+    try { hashes = [await this.send({ wallet, to: PORTAL, inputData, label: p >= 100 ? 'Portal.sellAll' : `Portal.sell ${p}%`, step, waitConfirm: false })]; }
     catch (e) {
       // 卖出那笔要在币安 App 里确认（或结果未知）：报价币确认后才到账，交给上层 followUp 确认后接着换回 BNB（以前这一步被跳过，报价币留在钱包）
       const fromBlock = !bnbQuote && toBnb ? await this.provider.getBlockNumber().then((b) => b - 2).catch(() => undefined) : null;

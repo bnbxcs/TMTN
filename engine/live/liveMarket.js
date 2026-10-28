@@ -35,13 +35,22 @@ const isAgentish = (l) => l.agentExclusive === true || l.agent === true || l.isA
 const STABLE = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD']);
 const POOL_ABI = ['function token0() view returns (address)', 'function token1() view returns (address)', 'function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint32,bool)', 'function getReserves() view returns (uint112,uint112,uint32)'];
 const DEC_ABI = ['function decimals() view returns (uint8)'];
+// pair → {t0,t1,d0,d1}：代币对与小数位链上不可变，进程内永久缓存；每次只再读 slot0（失败再 getReserves）
+const poolMetaCache = new Map();
 async function poolPriceUsd(provider, addr, bnbUsd) {
   const k = String(addr).toLowerCase(), bp = getRoute(k)?.bestPool; if (!bp?.pair) return 0;
   const w = String(bp.with || '').toUpperCase(), wUsd = STABLE.has(w) ? 1 : w === 'WBNB' || w === 'BNB' ? bnbUsd : 0; if (!(wUsd > 0)) return 0;
+  const pair = String(bp.pair).toLowerCase();
   const pool = new ethers.Contract(bp.pair, POOL_ABI, provider);
-  const [t0, t1] = (await Promise.all([pool.token0(), pool.token1()])).map((a) => a.toLowerCase());
+  let meta = poolMetaCache.get(pair);
+  if (!meta) {
+    const [t0, t1] = (await Promise.all([pool.token0(), pool.token1()])).map((a) => a.toLowerCase());
+    if (t0 !== k && t1 !== k) return 0;
+    const [d0, d1] = (await Promise.all([t0, t1].map((a) => new ethers.Contract(a, DEC_ABI, provider).decimals()))).map(Number);
+    meta = { t0, t1, d0, d1 }; poolMetaCache.set(pair, meta);
+  }
+  const { t0, t1, d0, d1 } = meta;
   if (t0 !== k && t1 !== k) return 0;
-  const [d0, d1] = (await Promise.all([t0, t1].map((a) => new ethers.Contract(a, DEC_ABI, provider).decimals()))).map(Number);
   let p1per0;   // 1 个 token0 值多少 token1（已按小数位换算）
   try { const sq = Number((await pool.slot0())[0]) / 2 ** 96; p1per0 = sq * sq * 10 ** (d0 - d1); }
   catch { const [r0, r1] = await pool.getReserves(); p1per0 = (Number(r1) / 10 ** d1) / (Number(r0) / 10 ** d0); }

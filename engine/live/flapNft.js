@@ -315,8 +315,13 @@ export class FlapNft extends EventEmitter {
 
   async quoteBuy(token, wallet, amountBnb) {
     const value = ethers.parseEther(String(amountBnb));
-    const out = (await this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[ZERO, token, value]], wallet))[0];
-    return { value, out };
+    const key = `${String(token).toLowerCase()}|${String(wallet).toLowerCase()}|buy|${value.toString()}`;
+    const hit = (this._qCache ||= new Map()).get(key);
+    if (hit && Date.now() - hit.at < 1200) return hit.v != null ? hit.v : hit.p;
+    const p = this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[ZERO, token, value]], wallet).then((r) => ({ value, out: r[0] }));
+    this._qCache.set(key, { at: Date.now(), p });
+    try { const v = await p; this._qCache.set(key, { at: Date.now(), v }); return v; }
+    catch (e) { this._qCache.delete(key); throw e; }
   }
   async quoteSell(token, wallet, amount) { return (await this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[token, ZERO, amount]], wallet))[0]; }
   async balance(token, wallet) { return (await this.call(token, erc, 'balanceOf', [wallet]))[0]; }
@@ -343,7 +348,7 @@ export class FlapNft extends EventEmitter {
     step(`Flap Portal 报价 ${f18(q.out).toFixed(0)} 个`, 0);
     const inputData = iface.encodeFunctionData('swapExactInput', [[ZERO, token, q.value, minOut(q.out, slippage), '0x']]);
     if (!fast) await this.simulate(wallet, inputData, q.value);   // 快捷买入不模拟，直接发（报价 + 滑点保护照旧）
-    const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step });
+    const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step, waitConfirm: false });
     return { venue: 'Flap Portal.swapExactInput（Agent ID 门槛内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash] };
   }
 
@@ -359,7 +364,7 @@ export class FlapNft extends EventEmitter {
     const out = await this.quoteSell(token, wallet, amt);
     const inputData = iface.encodeFunctionData('swapExactInput', [[token, ZERO, amt, minOut(out, slippage), '0x']]);
     await this.simulate(wallet, inputData, 0n);
-    hashes.push(await this.send({ wallet, to: FLAP_PORTAL, inputData, label: 'Flap Portal.swapExactInput 卖出', step }));
+    hashes.push(await this.send({ wallet, to: FLAP_PORTAL, inputData, label: 'Flap Portal.swapExactInput 卖出', step, waitConfirm: false }));
     return { venue: 'Flap Portal.swapExactInput（Agent ID 门槛内盘，卖出得 BNB）', expected: f18(out), txHash: hashes.at(-1), hashes };
   }
 }

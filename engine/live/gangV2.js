@@ -134,7 +134,7 @@ export class GangV2 {
     const spend = q.spend;
     const simOut = await this.simulate(wallet, iface.encodeFunctionData('buy', [token, spend, 0n]));
     step(`V2 报价 ${(+ethers.formatEther(simOut)).toFixed(0)} 个${q.capped ? `（到 1% 上限，只花 ${ethers.formatUnits(spend, dec)} ${quoteSym}，剩余留在钱包）` : ''}`, 0);
-    hashes.push(await this.portal.send({ wallet, to: GANG_V2, inputData: iface.encodeFunctionData('buy', [token, spend, minOut(simOut, slippage)]), label: 'Gang V2 buy', step }));
+    hashes.push(await this.portal.send({ wallet, to: GANG_V2, inputData: iface.encodeFunctionData('buy', [token, spend, minOut(simOut, slippage)]), label: 'Gang V2 buy', step, waitConfirm: false }));
     // 后台预授权：代币 max 授权给 V2 合约，卖出时少等一笔（失败不影响买单）
     setTimeout(() => this.portal.ensureAllowance({ wallet, token, spender: GANG_V2, amount: ethers.MaxUint256 / 2n, sym: '代币（预授权）', step: () => {} }).catch(() => {}), 0);
     return { venue: `Gang V2 内盘 buy（BNB→${quoteSym}，非原子）`, expected: +ethers.formatEther(simOut), txHash: hashes.at(-1), hashes };

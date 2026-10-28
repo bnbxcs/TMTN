@@ -281,7 +281,9 @@ export class LiveTrader extends EventEmitter {
     } catch (e) {
       if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) {
         if (e.code === 'APP_CONFIRM') this.lockState = { v: 'LOCKED', at: Date.now() };
-        Object.assign(order, { status: 'pending', stage: 'unknown', reason: `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
+        const tx = e.tx || order.pendingTx || null;
+        const stage = (e.code === 'UNCONFIRMED' && tx) ? 'broadcast' : 'unknown';
+        Object.assign(order, { status: 'pending', stage, pendingTx: tx || order.pendingTx, tx: tx || order.tx, reason: stage === 'broadcast' ? `已广播，等待上链确认，请勿重复下单：${tx}` : `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
         this.emit('order', order); this.followUp(order, e); return order;
       }
       Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts }); this.emit('order', order); return order;
@@ -574,7 +576,10 @@ export class LiveTrader extends EventEmitter {
         // 现在确认后查链上额度，够了就在同一笔订单里接着卖出；额度没变（App 里拒绝了）就不卖
         const ap = side === 'sell' && t && !e.afterConfirm ? e.approval : null;
         if (ap) { e.afterLabel = '授权确认后接着卖出…'; e.afterConfirm = () => this.sellAfterApproval(order, e, t, walletId, step); }
-        Object.assign(order, { status: 'pending', stage: 'unknown', reason: ap ? `卖出要先授权，请在币安 App 里确认授权，确认后会自动接着卖出（不用再点）：${e.message}` : `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
+        // 已拿到 hash：stage=broadcast（HTTP/前端可立刻结束等待）；尚无 hash（App 确认 / UNKNOWN）仍用 unknown
+        const tx = e.tx || order.pendingTx || null;
+        const stage = (e.code === 'UNCONFIRMED' && tx) ? 'broadcast' : 'unknown';
+        Object.assign(order, { status: 'pending', stage, pendingTx: tx || order.pendingTx, tx: tx || order.tx, reason: ap ? `卖出要先授权，请在币安 App 里确认授权，确认后会自动接着卖出（不用再点）：${e.message}` : (stage === 'broadcast' ? `已广播，等待上链确认，请勿重复下单：${tx}` : `已提交，正在确认，请勿重复下单：${e.message}`), latencyMs: Date.now() - order.ts });
         this.emit('order', order);
         const fu = this.followUp(order, e);
         if (ap) { const dk = `${t.address.toLowerCase()}|${side}|${Number(amount)}`; this.dupAt.set(dk, 'wait'); fu.finally(() => { if (this.dupAt.get(dk) === 'wait') this.dupAt.delete(dk); }); }
@@ -714,7 +719,9 @@ export class LiveTrader extends EventEmitter {
       return order;
     } catch (e) {
       if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) {
-        Object.assign(order, { status: 'pending', stage: 'unknown', reason: `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
+        const tx = e.tx || order.pendingTx || null;
+        const stage = (e.code === 'UNCONFIRMED' && tx) ? 'broadcast' : 'unknown';
+        Object.assign(order, { status: 'pending', stage, pendingTx: tx || order.pendingTx, tx: tx || order.tx, reason: stage === 'broadcast' ? `已广播，等待上链确认，请勿重复下单：${tx}` : `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
         this.emit('order', order); this.followUp(order, e); return order;
       }
       Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
@@ -766,7 +773,9 @@ export class LiveTrader extends EventEmitter {
     catch (x) {
       if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(x.code)) {   // 卖出那笔也要在 App 里确认：照常继续跟踪
         if (x.code === 'APP_CONFIRM') this.lockState = { v: 'LOCKED', at: Date.now() };
-        Object.assign(order, { status: 'pending', stage: 'unknown', reason: `已提交，正在确认，请勿重复下单：${x.message}`, latencyMs: Date.now() - order.ts }); this.emit('order', order);
+        const tx = x.tx || order.pendingTx || null;
+        const stage = (x.code === 'UNCONFIRMED' && tx) ? 'broadcast' : 'unknown';
+        Object.assign(order, { status: 'pending', stage, pendingTx: tx || order.pendingTx, tx: tx || order.tx, reason: stage === 'broadcast' ? `已广播，等待上链确认，请勿重复下单：${tx}` : `已提交，正在确认，请勿重复下单：${x.message}`, latencyMs: Date.now() - order.ts }); this.emit('order', order);
         this.followUp(order, x); return { handedOff: true };
       }
       return { done: true, status: 'failed', reason: `授权已确认，但卖出失败：${x.message}` };
@@ -828,6 +837,15 @@ export class LiveTrader extends EventEmitter {
       if (this.status.auth.state !== 'ok') throw new Error('币安钱包未登录，请在终端运行 baw auth signin');
       const cap = this.status.maxTradeBnb;
       if (cap > 0 && amt > cap) throw new Error(`单笔上限 ${cap} BNB（可在交易设置里修改）`);
+      // 战壕 quick：提前拉链上报价（短 TTL 缓存），与后面的余额/补款准备重叠；buy 内仍用报价算 minOut，不跳过滑点
+      let qWarm = null;
+      if (order.via === 'quick') {
+        try {
+          if (this.useFlapNft(t)) qWarm = this.flapNft.quoteBuy(t.address, w.address, trim(amt));
+          else if (this.useGang(t)) qWarm = this.gangTrade.quoteBuy(t.address, w.address, trim(amt));
+          else if (this.usePortal(t, 'buy') && (!t.quote || ['BNB', 'WBNB'].includes(String(t.quote).toUpperCase()))) qWarm = this.portal.quoteBuy(t.market, w.address, ethers.parseEther(String(amt)));
+        } catch { qWarm = null; }
+      }
       // BNB 余额用后台每 20 秒刷新的缓存；超过 30 秒没刷新才当场查
       if (!this.balAt || Date.now() - this.balAt > 30_000) { if (order.via === 'quick' && this.balAt) this.refreshBalance(); else { const t0 = Date.now(); await this.refreshBalance(); step('检查 BNB 余额（baw）', Date.now() - t0); } }   // 快捷买入：有过余额就不等刷新
       let payQuote = null;
@@ -846,6 +864,7 @@ export class LiveTrader extends EventEmitter {
           if ((w.bnb || 0) < amt) throw new Error(`已用 ${f.symbol} 换出 BNB，但余额 ${(w.bnb || 0).toFixed(4)} 仍不够 ${amt}，没有买入（换出的 BNB 留在钱包）`);
         }
       }
+      if (qWarm) await qWarm.catch(() => {});   // 让报价进短缓存；失败不挡下单（buy 里会再报）
       r = this.fairMinting(t) ? await fairBuy({ provider: this.market.provider, contractCall: baw.contractCall, wallet: w.address, token: t.address, amountBnb: trim(amt), step }).catch((e) => { if (/开盘/.test(e.message)) { t._fairAt = 0; this.market.gangFairState?.(t).catch(() => {}); } throw e; })   // 刚打满开盘、行情还没切：马上刷新，下一次就走外盘
         : this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
@@ -988,7 +1007,7 @@ export class LiveTrader extends EventEmitter {
     openFour.checkQuote(q);
     step(`OpenFour 报价 ${Number(q.estimate.tokenAmount).toFixed(0)} ${t.symbol}（至少 ${Number(q.minTokenOut).toFixed(0)}）`, Date.now() - t0);
     if (q.estimate.budgetNotFullyUsed) step(`接近 1% 持仓上限，只花掉部分${pay ? ` ${pay.sym}` : ' BNB'}，多余的${pay ? '留在钱包' : '同笔退回'}`, 0);
-    const hash = await this.portal.send({ wallet: w.address, to: q.tx.to, valueWei: q.tx.value, inputData: q.tx.inputData, label: 'OpenFour Core.buy', step });
+    const hash = await this.portal.send({ wallet: w.address, to: q.tx.to, valueWei: q.tx.value, inputData: q.tx.inputData, label: 'OpenFour Core.buy', step, waitConfirm: false });
     return { venue: 'OpenFour Core.buy（内盘）', expected: Number(q.estimate.tokenAmount), txHash: hash, hashes: [hash] };
   }
 

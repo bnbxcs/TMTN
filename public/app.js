@@ -2537,7 +2537,9 @@ document.addEventListener('click', (e) => {
     setSt('busy');
     Promise.resolve(trenchBuy(a, k)).catch(() => null).then(() => {
       const o = S.orders.find((x) => x.token === a && x.ts >= t0 - 1000 && x.side === 'buy');
-      setSt(!o ? null : o.status === 'failed' ? 'err' : o.status === 'filled' ? 'ok' : 'pend');
+      // 已广播 / 有 hash 即视为「已提交」结束 loading（回执异步）；不再干等「已上链」
+      const done = o && (o.status === 'filled' || o.tx || o.pendingTx || o.stage === 'broadcast');
+      setSt(!o ? null : o.status === 'failed' ? 'err' : done ? 'ok' : 'pend');
     }).finally(() => setTimeout(() => { tcState.delete(a); lastPulse = 0; renderPulse(); }, 2500));
     return;
   }

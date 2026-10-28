@@ -107,7 +107,7 @@ export class DexDirect {
       const out = (await this.call(PANCAKE_V2_ROUTER, router, 'getAmountsOut', [value, [WBNB, token]]))[0].at(-1);
       const data = router.encodeFunctionData('swapExactETHForTokensSupportingFeeOnTransferTokens', [minOut(out, slippage, taxPct), [WBNB, token], wallet, deadline()]);
       try { await this.provider.call({ from: wallet, to: PANCAKE_V2_ROUTER, value, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
-      hashes.push(await this.send({ wallet, to: PANCAKE_V2_ROUTER, valueWei: value, inputData: data, label: 'PancakeSwap 买入', step }));
+      hashes.push(await this.send({ wallet, to: PANCAKE_V2_ROUTER, valueWei: value, inputData: data, label: 'PancakeSwap 买入', step, waitConfirm: false }));
       return { venue: 'PancakeSwap V2 直连 · BNB→代币', expected: Number(ethers.formatUnits(out, tDec)) * (1 - taxPct / 100), txHash: hashes.at(-1), hashes };
     }
     // 报价币盘：钱包里已有的报价币先用，差额用 BNB 换（多换 3% 抵滑点，多的留在钱包）
@@ -127,7 +127,7 @@ export class DexDirect {
     const out = (await this.call(PANCAKE_V2_ROUTER, router, 'getAmountsOut', [need, [q, token]]))[0].at(-1);
     const data = router.encodeFunctionData('swapExactTokensForTokensSupportingFeeOnTransferTokens', [need, minOut(out, slippage, taxPct), [q, token], wallet, deadline()]);
     try { await this.provider.call({ from: wallet, to: PANCAKE_V2_ROUTER, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
-    hashes.push(await this.send({ wallet, to: PANCAKE_V2_ROUTER, inputData: data, label: 'PancakeSwap 买入', step }));
+    hashes.push(await this.send({ wallet, to: PANCAKE_V2_ROUTER, inputData: data, label: 'PancakeSwap 买入', step, waitConfirm: false }));
     return { venue: 'PancakeSwap V2 直连 · BNB→报价币→代币（非原子）', expected: Number(ethers.formatUnits(out, tDec)) * (1 - taxPct / 100), txHash: hashes.at(-1), hashes };
   }
 }

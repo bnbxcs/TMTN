@@ -237,7 +237,7 @@ export class GangV2 {
     if (r.tokens <= 0n) throw new Error('报价为 0：可能已到每个钱包 1% 上限，或盘已毕业');
     const data = pad.encodeFunctionData('buy', [token, need, minOut(r.tokens, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
-    hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 buy' : 'Gang V2 buy', step }));
+    hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 buy' : 'Gang V2 buy', step, waitConfirm: false }));
     return { venue: `Gang V2 · BNB→${qSym}→buy（非原子）`, expected: Number(ethers.formatEther(r.tokens)), txHash: hashes.at(-1), hashes };
   }
 

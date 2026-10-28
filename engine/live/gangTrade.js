@@ -23,8 +23,14 @@ export class GangTrade {
   async read(to, i, fn, args) { return i.decodeFunctionResult(fn, await this.provider.call({ to, data: i.encodeFunctionData(fn, args) })); }
 
   async quoteBuy(token, wallet, amountBnb) {
-    const [tokensOut, bnbIn, fee, refund] = await this.read(GANG_PAD, iface, 'quoteBuy', [token, wallet, ethers.parseEther(String(amountBnb))]);
-    return { tokensOut, bnbIn, fee, refund, out: f18(tokensOut), feeBnb: f18(fee), refundBnb: f18(refund) };
+    const wei = ethers.parseEther(String(amountBnb));
+    const key = `${String(token).toLowerCase()}|${String(wallet).toLowerCase()}|buy|${wei.toString()}`;
+    const hit = (this._qCache ||= new Map()).get(key);
+    if (hit && Date.now() - hit.at < 1200) return hit.v != null ? hit.v : hit.p;
+    const p = this.read(GANG_PAD, iface, 'quoteBuy', [token, wallet, wei]).then(([tokensOut, bnbIn, fee, refund]) => ({ tokensOut, bnbIn, fee, refund, out: f18(tokensOut), feeBnb: f18(fee), refundBnb: f18(refund) }));
+    this._qCache.set(key, { at: Date.now(), p });
+    try { const v = await p; this._qCache.set(key, { at: Date.now(), v }); return v; }
+    catch (e) { this._qCache.delete(key); throw e; }
   }
 
   async quoteSell(token, tokensIn) {
@@ -45,7 +51,7 @@ export class GangTrade {
     step(`Gang quoteBuy ${q.out.toFixed(0)} 个${q.refund > 0n ? `（到 1% 上限，退回 ${q.refundBnb} BNB）` : ''}`, 0);
     const inputData = iface.encodeFunctionData('buy', [token, minOut(q.tokensOut, slippage)]);
     await this.simulate(wallet, inputData, value);
-    const hash = await this.send({ wallet, to: GANG_PAD, valueWei: value, inputData, label: 'Gang buy', step });
+    const hash = await this.send({ wallet, to: GANG_PAD, valueWei: value, inputData, label: 'Gang buy', step, waitConfirm: false });
     return { venue: 'Gang 内盘 buy（BNB）', expected: q.out, txHash: hash, hashes: [hash] };
   }
 
@@ -62,7 +68,7 @@ export class GangTrade {
     const q = await this.quoteSell(token, amt);
     const inputData = iface.encodeFunctionData('sell', [token, amt, minOut(q.bnbToUser, slippage)]);
     await this.simulate(wallet, inputData, 0n);
-    hashes.push(await this.send({ wallet, to: GANG_PAD, inputData, label: 'Gang sell', step }));
+    hashes.push(await this.send({ wallet, to: GANG_PAD, inputData, label: 'Gang sell', step, waitConfirm: false }));
     return { venue: 'Gang 内盘 sell（BNB）', expected: q.out, txHash: hashes.at(-1), hashes };
   }
 
