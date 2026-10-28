@@ -22,6 +22,7 @@ import { fairPctBnb } from './engine/live/gangFair.js';
 import { mountUpdater } from './engine/updater.js';
 import { mediaHostOk } from './engine/live/meta.js';
 import { routeEvents, routeAlerts } from './engine/live/routeGuard.js';
+import { getCallouts, startGmgnCollector } from './engine/live/callouts.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -277,6 +278,7 @@ app.post('/api/quote-to-bnb/sweep', async (req, res) => {   // { plan: [{ slot, 
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/holders/:token', async (req, res) => { try { const v = LIVE ? await market.holders(req.params.token) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });   // HOLDERS_FEATURE 详情页「持有人」
+app.get('/api/callouts', async (req, res) => { try { res.set('Cache-Control', 'no-store').json(await getCallouts(req.query.ca, String(req.query.source || 'all'))); } catch (e) { res.status(e.status || 500).json({ error: e.message }); } });   // 详情页「喊单」：four.meme 代币评论（engine/live/callouts.js）
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
 app.get('/api/cache-status', (req, res) => res.json(cache.status()));   // 历史数据缓存（MySQL / Redis）是否启用、连上没有、命中次数
 cache.mysql(); cache.redis();   // 启动时先连一下（没配置就什么都不做），日志里能看到连上没有
@@ -291,6 +293,7 @@ app.post('/api/ui-prefs', (req, res) => {
 });
 // ---------- 追踪 + 跟单（只在实盘、只在主后端）----------
 let tracker = null;
+if (WALLET_SLOT === 1) startGmgnCollector();   // GMGN 全链喊单后台收集 + 存盘（第二个钱包后端不重复拉）
 if (LIVE && WALLET_SLOT === 1) {
   const { Tracker } = await import('./engine/live/tracker.js');
   tracker = new Tracker({ market, provider: market.provider, placeOrder, log: (m) => console.log(m) });
@@ -423,7 +426,14 @@ fs.mkdirSync(IMG_DIR, { recursive: true });
 const imgInflight = new Map(), imgFail = new Map(), imgFailN = new Map();
 const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.filebase.io/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
 // 只代理白名单里的图床（engine/live/meta.js 的 MEDIA_HOSTS，和元数据共用一份；.env IMG_HOSTS 可追加），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）
-const imgHostOk = (u) => mediaHostOk(u);
+// unavatar.io 只放行 /x/<推特号>?fallback=false 这一种地址（GMGN 喊单头像，见 engine/live/callouts.js）
+const unavatarOk = (u) => /^https:\/\/unavatar\.io\/x\/[A-Za-z0-9_]{1,15}\?fallback=false$/.test(u);
+// pbs.twimg.com 只放行推特头像 profile_images/<数字>/<名>_200x200.<ext>（GMGN 喊单头像，经 api.fxtwitter.com 查到）
+const twimgOk = (u) => /^https:\/\/pbs\.twimg\.com\/profile_images\/\d+\/[\w-]+_200x200\.(jpe?g|png|webp)$/i.test(u);
+const imgHostOk = (u) => unavatarOk(u) || twimgOk(u) || mediaHostOk(u);
+// unavatar 查到没设头像的号会给推特默认灰色人像（不是 404），按文件 sha1 认出来当作没有，页面显示自己的占位头像
+const DEFAULT_AVATAR_SHA1 = new Set(['c89753dd9d4eaca510eedac17cd0e485b8cca17f']);
+let unavatarUntil = 0;   // unavatar 免费版每个 IP 每天 25 次；429 以后按 retry-after 整体暂停，不再一张张去撞
 // 只收位图：按文件头判断真实格式（不信对方的 Content-Type），SVG（可以带脚本）一律不收
 const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };
 const sniffImg = (b) => {
@@ -441,7 +451,9 @@ async function imgFetchOne(u) {
     let r;
     for (let hop = 0; ; hop++) {   // 跳转自己跟，每一跳都要在白名单里
       if (!imgHostOk(u)) throw new Error('host not allowed');
+      if (unavatarOk(u) && Date.now() < unavatarUntil) throw new Error('unavatar rate limited');
       r = await fetch(u, { signal: ac.signal, redirect: 'manual', headers: { accept: 'image/*' } });
+      if (r.status === 429 && unavatarOk(u)) unavatarUntil = Date.now() + Math.min(Number(r.headers.get('retry-after')) || 3600, 86400) * 1000;
       if (r.status < 300 || r.status >= 400) break;
       if (hop >= 3 || !r.headers.get('location')) throw new Error('redirect');
       u = new URL(r.headers.get('location'), u).href;
@@ -450,6 +462,7 @@ async function imgFetchOne(u) {
     if (Number(r.headers.get('content-length') || 0) > 2e6) throw new Error('too big');
     const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 2e6 || !buf.length) throw new Error('size');
     const ct = sniffImg(buf); if (!ct) throw new Error('not raster image');
+    if (DEFAULT_AVATAR_SHA1.has(crypto.createHash('sha1').update(buf).digest('hex'))) throw new Error('http 404');   // 默认头像 = 没有（按 404 记失败）
     if (ct === 'image/avif' && /(^|\.)alphapulsehq\.top$/i.test(new URL(u).hostname)) throw new Error('format not allowed');   // 第三方转存图床只收 PNG / JPEG / WebP / GIF
     return { ct, buf };
   } finally { clearTimeout(tm); }
@@ -479,7 +492,7 @@ function imgWarm(u, key = crypto.createHash('sha1').update(u).digest('hex')) {
   {
     let p = imgInflight.get(key);
     if (!p) { p = imgFetch(u).then(({ ct, buf }) => { const file = key + '.' + (EXT[ct] || 'img'); fs.writeFileSync(path.join(IMG_DIR, file), buf); const m = { ct, file, url: u }; fs.writeFileSync(meta, JSON.stringify(m)); return m; }).finally(() => imgInflight.delete(key)); imgInflight.set(key, p); }
-    return p.catch((e) => { const n = (imgFailN.get(key) || 0) + 1; imgFailN.set(key, n); if (imgFailN.size > 5000) imgFailN.clear(); imgFail.set(key, Date.now() + (n <= 40 ? 3000 : 60_000));   /* 失败只记 3 秒（页面 3 秒重试时真的会重新下载），连续 40 次以后 60 秒 */ if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ throw e; });
+    return p.catch((e) => { const n = (imgFailN.get(key) || 0) + 1; imgFailN.set(key, n); if (imgFailN.size > 5000) imgFailN.clear(); imgFail.set(key, Date.now() + (unavatarOk(u) ? (e?.message === 'http 404' ? 6 * 3600_000 : 600_000) : n <= 40 ? 3000 : 60_000));   /* unavatar 免费额度有限：查不到的推特号 6 小时内不再问，其它失败（限流 / 超时）10 分钟 */   /* 失败只记 3 秒（页面 3 秒重试时真的会重新下载），连续 40 次以后 60 秒 */ if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ throw e; });
   }
 }
 app.get('/api/names', (req, res) => {
@@ -587,7 +600,7 @@ const PCT_FAST_BNB = Number(process.env.PCT_FAST_BNB ?? 0.1);
 const PCT_FAST_FLAP_BNB = Number(process.env.PCT_FAST_FLAP_BNB ?? 0.3), PCT_FAST_FLAP_LOW = Number(process.env.PCT_FAST_FLAP_LOW ?? 0.2);
 // 余额（后台缓存，不另查）不够 0.3 + gas 就用 0.2；也不超过交易设置里的单笔上限
 const flapFastBnb = (w) => { const bal = Number(trader.wallet?.(w)?.bnb), cap = Number(trader.status?.maxTradeBnb) || 0; let a = Number.isFinite(bal) && bal > 0 && bal < PCT_FAST_FLAP_BNB + 0.005 ? PCT_FAST_FLAP_LOW : PCT_FAST_FLAP_BNB; if (cap > 0 && a > cap) a = cap; return a; };
-// 市值超过 PCT_FAST_MCAP_USD（默认 $7k）时固定金额买不满：按 市值 × N% ÷ BNB 价 × 1.3 估算要花的 BNB（只看已缓存的市值，不另报价），和固定金额取大的那个，再压到单笔上限和余额（留 gas）。给多了不亏：Gang 按剩余额度只换需要的报价币，Flap 门槛盘多余 BNB 同笔退回，成本按链上实际花的算（市值超过 7k 不再按固定金额）
+// 市值超过 PCT_FAST_MCAP_USD（默认 $7k）时固定金额买不满：按 市值 × N% ÷ BNB 价 × 1.3 估算要花的 BNB（只看已缓存的市值，不另报价），和固定金额取大的那个，再压到单笔上限和余额（留 gas）。给多了不亏：Gang 按剩余额度只换需要的报价币，Flap 门槛盘多余 BNB 同笔退回，成本按链上实际花的算
 const PCT_FAST_MCAP_USD = Number(process.env.PCT_FAST_MCAP_USD ?? 7000);
 const fastByMcap = (w, tk, pct, cap, fixed) => {
   const m = Number(tk?.mcapUsd), u = Number(market.bnbUsd);
@@ -609,6 +622,8 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
   {
     if (LIVE && token && !market.get(token)) useHint(token, tokenHint);
     if (LIVE && token && !market.get(token)) await market.lookup(token).catch(() => null);   // 本后端还没收录这个币（多钱包时第二个后端可能会这样）
+    if (LIVE && token && /-plain$/.test(market.get(token)?.source || '')) await market.lookup(token).catch(() => null);   // 战壕里的普通盘：Flap 升级成可交易的 Portal 普通盘，Four 查是不是 OpenFour
+    if (LIVE && token && market.get(token)?.viewOnly) throw new Error('这个普通盘只能看行情，本终端暂不支持下单（普通 Four 内盘 / genius 内盘）');
     const local = () => Promise.all(wallets.map(async (w) => {
       let amt = amount;
       const tk = market.get(token);

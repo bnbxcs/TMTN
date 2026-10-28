@@ -799,7 +799,7 @@ body.fav-on .favbar { display: flex; }
 .act-r:hover { background: rgba(255, 255, 255, .04); } .act-r.mine { background: rgba(30, 203, 129, .07); }
 .act-r > * { overflow: hidden; text-overflow: ellipsis; } .act-r .tm { text-align: right; color: var(--muted); }
 .act-foot { text-align: center; color: var(--muted); padding: 8px; font-size: 11px; cursor: pointer; }
-@media (max-width: 1250px) { .chartrow { flex-direction: column; } .actbox { flex: 0 0 240px; } }
+@media (max-width: 1250px) { .chartrow { flex-direction: column; } .actbox, .cobox { flex: 0 0 240px; } .cobox.collapsed { flex: 0 0 34px; } .cobox.collapsed .co-open { flex-direction: row; } .cobox.collapsed .co-open-t { writing-mode: horizontal-tb; } }
 
 /* 活动面板：总额左对齐带买卖色点，四列按比例铺满 */
 .act-th, .act-r { grid-template-columns: 1.05fr 0.9fr 1.45fr 40px !important; gap: 8px !important; }
@@ -1186,7 +1186,7 @@ body.trkp-on #snipe { margin-left: calc(var(--trkpW, 340px) + 8px); }
 body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .hg-open.hidden { display: none; }
 @media (max-width: 1100px) { .hold-gang { width: 340px; } }
-@media (max-width: 860px) { #hold.hg-on { display: block; } .hold-gang { position: static; width: auto; height: 60vh; margin-top: 12px; } }
+@media (max-width: 860px) { #hold.hg-on { display: block; } .hold-gang { position: static; width: auto; height: 60vh; margin-bottom: 12px; } }
 .snp-top .trk-new.snp-real { background: var(--r); color: #fff; border-color: var(--r); margin-right: 8px; }
 .tag.div.on, .chip.div.on { background: rgba(14, 203, 129, .16); color: #0ecb81; font-weight: var(--fw-strong); cursor: help; }
 .tag.div.off, .chip.div.off { background: rgba(132, 142, 156, .14); color: #848e9c; cursor: help; }
@@ -1244,3 +1244,48 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 /* 钱包追踪：提示音开关 + 单钱包静音（静音的一直显示，没静音的悬停才显示） */
 .trkp-snd { font-size: 13px; opacity: .6; } .trkp-snd.on { opacity: 1; }
 .trkp-mute { font-size: 11px; opacity: 0; } .trkp-e:hover .trkp-mute { opacity: .55; } .trkp-mute.on, .trkp-e:hover .trkp-mute.on { opacity: .9; }
+
+/* 详情页「喊单」 */
+.cobox { flex: 0 0 340px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; font-size: 12px; }
+:root:not([data-theme="calm"]) .cobox, :root:not([data-theme="calm"]) .cobox * { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) .cobox .co-av { border-radius: 50% !important; }   /* 头像在经典深色主题下也是圆的 */
+.co-open { display: none; }
+.cobox.collapsed > :not(.co-open) { display: none; }
+.co-item { padding: 8px 10px; }
+.co-chip.on { color: var(--text); border-color: var(--b); background: var(--b-bg); }
+.co-chip.off { opacity: .45; }
+.co-list { display: flex; flex-direction: column; }
+.co-item { display: flex; gap: 10px; border-bottom: 1px solid var(--line); }
+.co-av { width: 28px; height: 28px; border-radius: 50%; flex: none; object-fit: cover; background: var(--panel2); }
+.co-av0 { display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 600; line-height: 1; overflow: hidden; }
+.co-body { min-width: 0; flex: 1; }
+.co-meta { display: flex; gap: 8px; align-items: center; }
+.co-meta b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.co-text { margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.co-tr { margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--panel2); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.co-kol { color: var(--y); background: var(--y-bg); }
+/* 喊单栏展开时：K 线至少留 100px，活动 / 喊单可以收窄（左边钱包追踪栏打开时中间很窄） */
+.chartrow > .chartbox { min-width: 100px; }
+.chartrow:has(.cobox:not(.collapsed)) .actbox { flex: 0 1 360px; min-width: 300px; }
+.cobox:not(.collapsed) { flex: 0 1 340px; min-width: 180px; }
+@media (max-width: 1250px) { .chartrow:has(.cobox:not(.collapsed)) .actbox, .cobox:not(.collapsed) { flex: 0 0 240px; min-width: 0; } }
+.co-h .spacer { flex: 1; }
+.co-live { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--dim); }
+.co-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--g); animation: coPulse 2s ease-in-out infinite; }
+@keyframes coPulse { 50% { opacity: .35; } }
+.co-x { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; border: 1px solid transparent; color: var(--muted); background: transparent; cursor: pointer; flex: none; transition: background .15s, color .15s, border-color .15s; }
+.co-x:hover { color: var(--text); background: var(--panel2); border-color: var(--line2); }
+.cobox.collapsed { flex: 0 0 34px; cursor: pointer; }
+.cobox.collapsed .co-open { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; padding: 10px 0; width: 100%; color: var(--muted); background: transparent; cursor: pointer; transition: background .15s, color .15s; }
+.cobox.collapsed .co-open:hover { color: var(--text); background: var(--panel2); }
+.co-open-t { writing-mode: vertical-rl; font-size: 12px; letter-spacing: 3px; font-weight: 600; }
+.co-open-n { font-size: 10px; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: var(--b-bg); color: var(--b); text-align: center; }
+.co-open-n:empty { display: none; }
+.co-chips { display: flex; gap: 4px; flex-wrap: nowrap; overflow: hidden; padding: 0 10px 7px; border-bottom: 1px solid var(--line); }
+.co-chip { font-size: 10.5px; line-height: 16px; padding: 1px 9px; border: 1px solid var(--line2); border-radius: 999px; color: var(--muted); background: transparent; cursor: pointer; white-space: nowrap; }
+.co-chip:hover { color: var(--text); }
+.co-new { animation: coNew 2.5s ease-out; }
+@keyframes coNew { 0% { background: var(--b-bg); } 100% { background: transparent; } }
+.co-h { white-space: nowrap; min-width: 0; } .co-h > * { flex: none; } .co-h .spacer { flex: 1; }
+.co-chips { overflow-x: auto; scrollbar-width: none; } .co-chips::-webkit-scrollbar { display: none; }
+.co-h #coCnt { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

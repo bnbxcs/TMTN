@@ -46,7 +46,7 @@ export class GangPadChain extends EventEmitter {
     const buy = log.topics[0] === T_BUY;
     const quote = buy ? f18(w[0]) + f18(w[1]) + f18(w[2]) : f18(w[3]), tokens = buy ? f18(w[3]) : f18(w[0]);
     if (!(tokens > 0)) return null;
-    return { token: ('0x' + log.topics[1].slice(26)).toLowerCase(), trader: ('0x' + log.topics[2].slice(26)).toLowerCase(), side: buy ? 'buy' : 'sell', bnb: quote, tokens, price: quote / tokens, tx: log.transactionHash, ts };
+    return { token: ('0x' + log.topics[1].slice(26)).toLowerCase(), trader: ('0x' + log.topics[2].slice(26)).toLowerCase(), side: buy ? 'buy' : 'sell', bnb: quote, tokens, price: quote / tokens, tx: log.transactionHash, ts, blk: log.blockNumber, li: log.index };   // blk / li：同一秒的几笔按上链顺序排
   }
   // 一个币在某个 pad 上 [fromBlock, toBlock] 的全部买卖（按出块时间，升序）。给 Gang V3 盘从开盘起重建 K 线用：gang.fun 成交接口没有 V3 盘的成交，
   // 以前重启后 K 线只从重启那一刻开始，之前的成交（包括自己的买卖标）全挤在第一根上。只读

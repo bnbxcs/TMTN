@@ -79,6 +79,10 @@
     <div class="panel actbox" id="actBox"><div class="act-h"><b>活动</b><span class="muted" id="actCnt"></span></div>
       <div class="act-th"><span>总额</span><span>市值</span><span>交易者</span><button id="actSort" title="点击切换时间排序">时间 ↓</button></div>
       <div class="act-b" id="actBody"></div></div>
+    <div class="panel cobox" id="coBox"><button class="co-open" id="coOpen" title="展开喊单"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/><path d="M10 10l-2 2 2 2"/></svg><span class="co-open-t">喊单</span><span class="co-open-n" id="coStripCnt"></span></button>
+      <div class="act-h co-h"><b>喊单</b><span class="muted" id="coCnt"></span><span class="co-live" title="自动更新中（展开时每 15 秒）"><i></i></span><span class="spacer"></span><button class="co-x" id="coClose" title="收起喊单" aria-label="收起喊单"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/><path d="M8 10l2 2-2 2"/></svg></button></div>
+      <div class="co-chips" id="coChips"></div>
+      <div class="act-b" id="coBody"></div></div>
     </div>
     <div class="vsplit" id="vsplit" title="上下拖动调整 K 线高度"></div>
     <div class="panel bottom">

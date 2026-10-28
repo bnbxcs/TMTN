@@ -240,10 +240,15 @@ export class FlapNft extends EventEmitter {
         this.emit('gated', g, { restore: false }); this.resubTrades();
       } else if (t0 === T_CREATED) {
         // Portal 上所有 Flap 币的创建都会推过来，只留最近 64 个（门槛事件在同一笔交易里，前后差几毫秒）
-        const [, , , token, name, symbol, meta] = coder.decode(['uint256', 'address', 'uint256', 'address', 'string', 'string', 'string'], l.data); const k = token.toLowerCase();
+        const [ts, , , token, name, symbol, meta] = coder.decode(['uint256', 'address', 'uint256', 'address', 'string', 'string', 'string'], l.data); const k = token.toLowerCase();
         const m = { ...(name && { name }), ...(symbol && { symbol }), ...(meta && { uri: /^https?:\/\//i.test(meta) ? meta : `https://flap.mypinata.cloud/ipfs/${meta}` }) };
         const g = this.reg.tokens[k];
-        if (!g) { this.created ||= new Map(); this.created.set(k, m); if (this.created.size > 64) this.created.delete(this.created.keys().next().value); return; }
+        if (!g) {
+          this.created ||= new Map(); if (this.created.has(k)) return;   // WS 和 getLogs 补查都会送来同一条
+          this.created.set(k, m); if (this.created.size > 64) this.created.delete(this.created.keys().next().value);
+          this.emit('created', { token: k, ...m, ts: Number(ts) * 1000 || 0, block: l.blockNumber });   // 普通盘（不是门槛盘）：战壕「普通盘」用（plainPools.js）
+          return;
+        }
         if (g.meta?.name && g.meta?.symbol) return;
         g.meta = { ...m, ...g.meta }; this.save(); this.emit('meta', g);
       } else if (t0 === T_GATE_UPD) {
