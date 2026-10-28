@@ -26,7 +26,7 @@ const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
 // 发射（迁移 / 毕业 / 打新开盘）时间登记表：{ 代币地址: 毫秒 }。「已开盘」列按它倒序，重启后直接用，不再重查
 const LAUNCH_FILE = dataFile('launched-at.json');
-// 「已开盘」收录所有迁移的 Flap / Four 盘（不论是不是 Agent 盘，jak 2026-10-28）：Flap = Portal 的 LaunchedToDEX（flapNft 已经在订阅），
+// 「已开盘」收录所有迁移的 Flap / Four 盘（不论是不是 Agent 盘）：Flap = Portal 的 LaunchedToDEX（flapNft 已经在订阅），
 // Four 普通盘 = TokenManager2 的 LiquidityAdded（每分钟 getLogs 补查）。限量：每个平台最多留最近 AUTO_MAX 个、48 小时；市值低于 AUTO_DUST_USD 的不留；
 // Four 普通盘还要 DexScreener 上最深池子流动性 ≥ MIN_LIQ_USD（lookupDex）。AUTO_LAUNCHED=0 关掉。Four 普通盘记在 data/auto-launched.json，重启后补回
 const AUTO_LAUNCHED = env('AUTO_LAUNCHED', '1') !== '0';
