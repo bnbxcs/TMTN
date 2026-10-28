@@ -6,7 +6,7 @@
 
 <p align="center"><b><i>TMTN = The Match, The Night</i></b></p>
 
-<p align="center">当前版本 <b>v4.4</b> · 更新内容见 <a href="CHANGELOG.md">CHANGELOG.md</a></p>
+<p align="center">当前版本 <b>v4.41</b> · 更新内容见 <a href="CHANGELOG.md">CHANGELOG.md</a></p>
 
 > **English summary.** TMTN is a local, single-user trading terminal for BSC "agent-only" meme launchpads — **Flap Agent Bonding Curve**, **Four.meme (OpenFour, Agent-ID-exclusive template)** and **gang.fun (old pad + V2 pads)**. It runs a small Node.js server on `127.0.0.1` plus a browser UI. All signing goes through Binance's **Agentic Wallet CLI (`baw`)**, so **no private key is ever stored or handled locally**. Features include a GMGN-style trenches view, K-line charts, live trade feed, per-trader PnL drawer, one-click buy/sell panel, holdings with USD PnL, auto-claim and an optional MySQL + Redis history cache. **It trades real funds. It is unaudited. Use entirely at your own risk.**
 
