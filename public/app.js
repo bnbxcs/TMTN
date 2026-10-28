@@ -2358,7 +2358,7 @@ for (const ms of [4000, 8000, 22000]) window.addEventListener('order-done', () =
 
 /* ---------- 战壕：三列（新创建 / 即将打满 / 已开盘），每列自己的搜索、快捷买入金额、P1-P3 预设、声音、隐藏、筛选 ---------- */
 const PLATS = ['flap', 'four', 'gang'];
-const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' ? t.platform : 'flap');
+const platOf = (t) => { const p = t.launchPlat || t.platform; return p === 'four' || p === 'gang' ? p : 'flap'; };   // launchPlat：自动收录的 Four 普通盘（后端按外盘代币交易）也算 Four
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
 const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gangVers: [] } });
 const TR = (() => {

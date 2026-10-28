@@ -75,6 +75,9 @@ export class FlapNft extends EventEmitter {
   get(token) { return this.reg.tokens[String(token || '').toLowerCase()] || null; }
 
   async start() {
+    // 自动收录的已开盘普通盘（auto）只留 48 小时，免得登记表越积越多、每次重启都全部恢复
+    let pruned = false; for (const [k, g] of Object.entries(this.reg.tokens)) if (g.auto && Date.now() - (g.seenAt || 0) > 48 * 3600_000) { delete this.reg.tokens[k]; pruned = true; }
+    if (pruned) this.save();
     for (const g of this.list()) this.emit('gated', g, { restore: true });
     this.sub = new WsLogs({ label: 'flap-nft', urls: [...NODEREAL_WSS, PUBLIC_WSS], filters: [{ address: FLAP_PORTAL, topics: TOPICS }], onLog: (l) => this.handle(l), status: this.status }).start();
     this.pollLoop(); this.tradeLoop();
@@ -249,6 +252,7 @@ export class FlapNft extends EventEmitter {
       } else if (t0 === T_DEX) {
         const [token] = coder.decode(['address', 'address', 'uint256', 'uint256'], l.data); const g = this.get(token);
         if (g && !g.dex) { g.dex = true; g.dexBlock = l.blockNumber; this.save(); this.emit('dex', g); this.resubTrades(); }
+        else if (!g) this.emit('dexUnknown', token.toLowerCase(), l.blockNumber);   // 不在登记表里的普通 Flap 盘迁移了：「已开盘」要收录（liveMarket.autoQ）
       }
     } catch { /* 解析失败的跳过 */ }
   }
@@ -298,7 +302,7 @@ export class FlapNft extends EventEmitter {
 
   // 不在登记表里的地址（钱包 2 后端没订阅到、手动搜索的）：直接问 Portal，是门槛盘就补登记。
   // plain = 手动粘贴地址：没有门槛的普通 Portal 盘（如以 NOKB 计价的 NOKIA 0x1871…7777）也收录，按「门槛已取消」同一套买卖（Portal 自己做 BNB⇄报价币）
-  async check(token, { plain = false, at: atHint } = {}) {
+  async check(token, { plain = false, at: atHint, auto = false } = {}) {
     const k = String(token).toLowerCase(); if (this.reg.tokens[k]) return this.reg.tokens[k];
     let nft; try { nft = await this.gateOf(k); } catch { return null; }
     if (!nft || nft === ZERO) {
@@ -314,7 +318,8 @@ export class FlapNft extends EventEmitter {
         const head = await this.provider.getBlock('latest'), old = await this.provider.getBlock(head.number - 1000), ms = ((head.timestamp - old.timestamp) * 1000) / 1000 || 750;
         block = Number.isFinite(at) ? Math.max(0, head.number - Math.ceil((head.timestamp * 1000 - at) / ms) - 300) : head.number - 5000;
       } catch { /* 读不到就按默认回补 */ }
-      const g = { token: k, nft: ZERO, plain: true, removed: true, dex: st.status === 4, block, tx: null, seenAt: Date.now(), at: Number.isFinite(at) ? at : null };
+      if (auto && st.status !== 4) return null;   // 自动收录只要已迁移的
+      const g = { token: k, nft: ZERO, plain: true, removed: true, dex: st.status === 4, block, tx: null, seenAt: Date.now(), at: Number.isFinite(at) ? at : null, ...(auto && { auto: true }) };
       this.reg.tokens[k] = g; this.save(); this.emit('gated', g, { restore: true }); return g;
     }
     const g = { token: k, nft, block: null, tx: null, seenAt: Date.now(), at: null };
