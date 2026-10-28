@@ -34,6 +34,13 @@ const AUTO_FILE = dataFile('auto-launched.json');
 const AUTO_KEEP_MS = 48 * 3600_000, AUTO_MAX = Number(env('AUTO_LAUNCHED_MAX', '150')), AUTO_DUST_USD = Number(env('AUTO_LAUNCHED_MIN_MC', '3000'));
 const FOUR_TM2 = '0x5c952063c7fc8610FFDB798152D69F0B9550762b';
 const T_FOUR_LIQ = '0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0';   // LiquidityAdded(address base, uint256 offers, address quote, uint256 funds)，都在 data 里
+// genius.fun（genius.fun/docs/integrate、/contracts/manifest.json）：工厂发 PoolGraduated(address indexed token, …) = 毕业建好 PancakeSwap Infinity CL 池（锁仓），之后外盘交易。
+// 当前工厂 m4.2 + 旧工厂 m4.1 都扫。DexScreener 收录了就按外盘代币收录；没收录的按链上读：getLaunchedToken / poolIdFor + CLPoolManager.getSlot0 算价格
+const GENIUS_FACTORIES = ['0x37eE8AeE29C5efd3C1A7edA6dF3F510779928a37', '0x78EAE9537C0ef90DFe9B7ae964682Fe8138afe31'];
+const T_GENIUS_GRAD = '0x0a44ef75df69c534f43cd6c1aa3ef8983065fe5fe79ef9e79f6494e6f258c259';   // PoolGraduated(address indexed token, uint256 positionId, uint256 tokenAmount, uint256 pairTokenAmount)
+const GENIUS_I = new ethers.Interface(['function getLaunchedToken(address) view returns ((address token, address curve, address deployer, address creatorFeeRecipient, address pairToken, uint256 graduationThreshold, uint24 poolFee, int24 tickSpacing, uint16 creatorTaxBps, bool buybackEnabled, uint8 phase, uint256 sweptQuote, uint256 sweptTokens, uint256 sweptAt, bool exists))',
+  'function poolKeyFor(address) view returns ((address currency0, address currency1, address hooks, address poolManager, uint24 fee, bytes32 parameters))', 'function poolIdFor(address) view returns (bytes32)',
+  'function name() view returns (string)', 'function symbol() view returns (string)', 'function totalSupply() view returns (uint256)', 'function getSlot0(bytes32) view returns (uint160, int24, uint24, uint24)']);
 const BOOT = Date.now();
 const GANG_TOKEN = '0x0c6302401aa5325c2e36f170f52c00b1d220b405';   // GANG 市值（底栏）：随报价币价格一起从 DexScreener 拿，不额外读 RPC
 
@@ -213,18 +220,19 @@ export class LiveMarket extends EventEmitter {
       }
     } finally { this._launchRun = false; }
   }
-  autoQ(plat, k, block, tries = 0) {
+  autoQ(plat, k, block, tries = 0, fac = null) {
     const q = (this._autoQ ||= []);
     if ((this.get(k) && !tries) || q.length >= 200 || q.some((x) => x.k === k)) return;
-    q.push({ plat, k, block, tries }); this.autoRun();
+    q.push({ plat, k, block, tries, fac }); this.autoRun();
   }
   async autoRun() {
     if (this._autoRun) return; this._autoRun = true;
     try { while (this._autoQ.length) { await this.autoOne(this._autoQ.shift()).catch(() => {}); await new Promise((ok) => setTimeout(ok, 1500)); } }
     finally { this._autoRun = false; }
   }
-  async autoOne({ plat, k, block, tries }) {
+  async autoOne({ plat, k, block, tries, fac }) {
     const at = block ? await this.provider.getBlock(block).then((b) => b.timestamp * 1000).catch(() => 0) : 0;
+    if (plat === 'genius') return this.geniusAdd(k, fac, at, tries, block);
     if (plat === 'flap') {
       if (!(await this.flapNft.check(k, { plain: true, auto: true }).catch(() => null))) return;
       const t = this.get(k); if (t && at) this.saveLaunch(t, at);
@@ -240,6 +248,37 @@ export class LiveMarket extends EventEmitter {
     const r = (this._autoReg ||= (() => { try { return JSON.parse(readFileSync(AUTO_FILE, 'utf8')); } catch { return {}; } })());
     r[k] = { plat: 'four', at: ms }; try { writeFileSync(AUTO_FILE, JSON.stringify(r)); } catch { /* 下次再存 */ }
   }
+  // genius.fun 已毕业的币：DexScreener 有池子（流动性 ≥ MIN_LIQ_USD）就按外盘代币收录，否则从链上建：名字 / 代号 / 总量 / 报价币 + Infinity 池现价
+  async geniusAdd(k, fac, at, tries = 0, block = null) {
+    const gc = (to, fn, args = []) => this.provider.call({ to, data: GENIUS_I.encodeFunctionData(fn, args) }).then((r) => GENIUS_I.decodeFunctionResult(fn, r));
+    let t = this.get(k);
+    if (!t) { const rows = await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + k, { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).catch(() => null); t = await this.lookupDex(k, rows).catch(() => null); }
+    if (!t) {
+      const lt = await gc(fac, 'getLaunchedToken', [k]).then((r) => r[0]).catch(() => null);
+      if (!lt?.exists || Number(lt.phase) !== 2) { if (tries < 3) setTimeout(() => this.autoQ('genius', k, block, tries + 1, fac), 120_000).unref?.(); return; }   // 2 = PoolCreated
+      const pair = lt.pairToken.toLowerCase(), wb = pair === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
+      const [name, symbol, sup, qs] = await Promise.all([gc(k, 'name').then((r) => r[0]).catch(() => ''), gc(k, 'symbol').then((r) => r[0]).catch(() => '?'), gc(k, 'totalSupply').then((r) => Number(ethers.formatEther(r[0]))).catch(() => 1e9),
+        wb ? 'BNB' : gc(pair, 'symbol').then((r) => r[0]).catch(() => '?')]);
+      t = this.base(k);
+      Object.assign(t, { source: 'dex', platform: 'dex', symbol: symbol || '?', name, quote: qs, quoteAddress: pair, creator: lt.deployer.toLowerCase(), createdAt: at || Date.now(), stage: 'dex', progress: 100,
+        maxSupply: sup || 1e9, dexDex: 'PancakeSwap Infinity', _gnFac: fac });
+      await this.geniusPrice(t).catch(() => {});
+    }
+    if (t.source !== 'dex') return;
+    Object.assign(t, { launchPlat: 'genius', autoLaunched: true, pinned: false });
+    const ms = at || t.migratedAt || t.createdAt; this.saveLaunch(t, ms);
+    const r = (this._autoReg ||= (() => { try { return JSON.parse(readFileSync(AUTO_FILE, 'utf8')); } catch { return {}; } })());
+    r[k] = { plat: 'genius', at: ms, fac }; try { writeFileSync(AUTO_FILE, JSON.stringify(r)); } catch { /* 下次再存 */ }
+  }
+  // 现价（报价币 / 个）= Infinity CL 池 sqrtPrice²，币是 currency0 就直接用，否则取倒数（两边都按 18 位）
+  async geniusPrice(t) {
+    const gc = (to, fn, args = []) => this.provider.call({ to, data: GENIUS_I.encodeFunctionData(fn, args) }).then((r) => GENIUS_I.decodeFunctionResult(fn, r));
+    if (!t._gnPool) { const [[id], [key]] = await Promise.all([gc(t._gnFac, 'poolIdFor', [t.address]), gc(t._gnFac, 'poolKeyFor', [t.address])]); t._gnPool = { id, tok0: key.currency0.toLowerCase() === t.address, pm: key.poolManager }; }
+    const sq = Number((await gc(t._gnPool.pm, 'getSlot0', [t._gnPool.id]))[0]) / 2 ** 96, p = sq * sq;
+    if (!(p > 0) || !isFinite(p)) return;
+    t.price = t._gnPool.tok0 ? p : 1 / p;
+    const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * (t.maxSupply || 1e9) * u;
+  }
   // 启动：补回 48 小时内收录过的 Four 普通盘，Four 迁移事件从约 4 小时前扫起，之后每分钟补查；每 5 分钟清理一次超量 / 过期 / 小市值的
   async autoStart() {
     const r = (this._autoReg ||= (() => { try { return JSON.parse(readFileSync(AUTO_FILE, 'utf8')); } catch { return {}; } })());
@@ -249,7 +288,10 @@ export class LiveMarket extends EventEmitter {
     for (let i = 0; i < ks.length; i += 30) {
       const chunk = ks.slice(i, i + 30);
       const rows = await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + chunk.join(','), { signal: AbortSignal.timeout(8000) }).then((x) => x.json()).catch(() => null);
-      for (const k of chunk) { const t = await this.lookupDex(k, rows).catch(() => null); if (t?.source === 'dex') { Object.assign(t, { launchPlat: 'four', autoLaunched: true, pinned: false }); this.saveLaunch(t, r[k].at); } }
+      for (const k of chunk) {
+        if (r[k].plat === 'genius') { await this.geniusAdd(k, r[k].fac, r[k].at, 3).catch(() => {}); continue; }
+        const t = await this.lookupDex(k, rows).catch(() => null); if (t?.source === 'dex') { Object.assign(t, { launchPlat: 'four', autoLaunched: true, pinned: false }); this.saveLaunch(t, r[k].at); }
+      }
     }
     const scan = async () => {
       try {
@@ -264,12 +306,27 @@ export class LiveMarket extends EventEmitter {
         }
       } catch { /* 下一分钟接着从 _fourLiqFrom 扫 */ }
     };
+    const gscan = async () => {
+      try {
+        const prov = this.four.provider, head = await prov.getBlockNumber();
+        let from = this._gnFrom || head - 20_000;
+        while (from <= head) {
+          const to = Math.min(head, from + 4999);
+          for (const l of await prov.getLogs({ address: GENIUS_FACTORIES, topics: [T_GENIUS_GRAD], fromBlock: from, toBlock: to })) {
+            const k = ('0x' + String(l.topics[1]).slice(26)).toLowerCase(); if (ethers.isAddress(k)) this.autoQ('genius', k, l.blockNumber, 0, l.address);
+          }
+          from = to + 1; this._gnFrom = from;
+        }
+      } catch { /* 下一分钟接着扫 */ }
+      for (const t of this.tokens.values()) if (t._gnFac) await this.geniusPrice(t).catch(() => {});   // 链上建的 genius 币每分钟刷新一次现价
+    };
     scan(); setInterval(scan, 60_000).unref?.();
+    gscan(); setInterval(gscan, 60_000).unref?.();
     setInterval(() => this.autoPrune(), 300_000).unref?.();
   }
   autoPrune() {
     const keep = this.keepSet?.() || new Set(), now = Date.now(), by = { flap: [], four: [] };
-    for (const t of this.tokens.values()) if (t.autoLaunched && !keep.has(t.address)) by[t.launchPlat === 'four' ? 'four' : 'flap'].push(t);
+    for (const t of this.tokens.values()) if (t.autoLaunched && !keep.has(t.address)) (by[t.launchPlat || 'flap'] ||= []).push(t);
     for (const list of Object.values(by)) {
       list.sort((a, b) => (b.migratedAt || b.createdAt || 0) - (a.migratedAt || a.createdAt || 0));
       list.forEach((t, i) => {

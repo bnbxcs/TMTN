@@ -425,7 +425,7 @@ td.addr { color: var(--muted); }
 .tc-img .logo.tl { width: 64px; height: 64px; font-size: 22px; border-radius: 8px !important; }
 .tc-img .logo.tl img { border-radius: 8px !important; }
 .tc-badge { position: absolute; right: -4px; bottom: -4px; width: 18px; height: 18px; border-radius: 50% !important; display: grid; place-items: center; font: var(--fw-strong) 9px/1 var(--mono, monospace); font-style: normal; color: #fff; border: 2px solid #0b0b0f; background: #7b3fe4; }
-.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; }
+.tc-badge.four { background: #f39a3d; color: #1a1400; } .tc-badge.gang { background: #1b998b; } .tc-badge.genius { background: #2f7cf6 !important; color: #fff !important; font-size: 7px; }
 .tc-prog { height: 3px; background: #2a2440; border-radius: 2px; overflow: hidden; width: 64px; } .tc-prog i { display: block; height: 100%; background: #0ecb81; }
 .tc-dev { font: 10px var(--mono, monospace); color: #6b7280; width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tc-m { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
