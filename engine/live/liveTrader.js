@@ -174,6 +174,8 @@ export class LiveTrader extends EventEmitter {
     const w = this.wallets[0]; if (!w || this.syncing || Date.now() - (this.syncAt || 0) < 55_000) return; this.syncing = true; this.syncAt = Date.now();
     try {
       if (!this.posLoaded) { this.posLoaded = true; try { for (const [k, p] of Object.entries(JSON.parse(readFileSync(POS_FILE, 'utf8')))) if (!this.positions.has(k)) this.positions.set(k, p); } catch { /* 没有文件 */ } }
+      // 持有中、行情列表里却没有的币：重启时列表先满 1000 个、持仓还没从文件读回来，它被当成老盘淘汰了，之后也不会再收录（GANGBALL 0x45f8… 2026-10-29 持仓栏少了它）。按搜索的办法上链查一次收回来
+      for (const p of [...this.positions.values()]) if (p.walletId === w.id && p.amount > 0 && p.token && !this.market.get(p.token)) await this.market.lookup?.(p.token).catch(() => null);
       const toks = [...this.market.tokens.values()];
       await Promise.all(toks.map(async (t) => {
         let amt = null;
