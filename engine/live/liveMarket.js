@@ -391,6 +391,7 @@ export class LiveMarket extends EventEmitter {
     setInterval(() => this.autoPrune(), 300_000).unref?.(); setTimeout(() => this.autoPrune(), 90_000).unref?.();   // 启动 90 秒后先清一遍超过一天的
   }
   // 创建时间超过 TRENCH_KEEP_MS 的盘子不进 / 不留在战壕（持有中 / 收藏 / 手动打开的除外）；创建时间不明（0）的不算
+  ms(v) { const n = Number(v) || 0; return n > 0 && n < 1e12 ? n * 1000 : n; }   // 秒 / 毫秒都接受
   expired(at, address) { return at > 0 && Date.now() - at > TRENCH_KEEP_MS && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
   autoPrune() {
     const keep = this.keepSet?.() || new Set(), now = Date.now(), by = { flap: [], four: [] };
@@ -465,6 +466,7 @@ export class LiveMarket extends EventEmitter {
   // four.meme Agentic Wallet 专属内盘：新盘
   upsertFour(it, isNew) {
     const existed = this.tokens.has(this.key(it.token));
+    if (!existed && !isNew && this.expired(this.ms(it.createdAt), it.token)) return;   // 重启回扫 / 接口列表里超过一天的老盘不进战壕
     const t = this.base(it.token);
     Object.assign(t, {
       source: 'four-agent', platform: 'four', agentExclusive: it.agentOnly !== false, presetId: it.agentOnly === false ? '' : String(AGENT_ID_TEMPLATE), symbol: it.symbol, name: it.name,
@@ -775,6 +777,7 @@ export class LiveMarket extends EventEmitter {
   // gang.fun：接口给的列表（已筹 / 进度 / 价格 / FDV / 持有人）；毕业门槛按 已筹 ÷ 进度 推算
   upsertGang(it, isNew) {
     const existed = this.tokens.has(this.key(it.address));
+    if (!existed && !isNew && this.expired(this.ms(it.createdAt), it.address)) return;   // 接口列表 / 重启补回里超过一天的老盘不进战壕
     const t = this.base(it.address);
     const qa = String(it.quoteAddress || '').toLowerCase();
     if (t._qDec == null && qa && QUOTE_DEC[qa]) t._qDec = QUOTE_DEC[qa];   // 已知的非 18 位报价币（XAUt 6 位、BEM 8 位）马上用，不等链上曲线
