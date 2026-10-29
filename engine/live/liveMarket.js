@@ -14,6 +14,7 @@ const T_FLAP_DEX = '0x6e4f47630b8745b8cacbd44f42a8a33e7eea7cc08ef22fc7630f4f3857
 import { GangPadChain } from './gangPadChain.js';
 import { GangV2, CHAIN_HIST_PADS } from './gangV2Pads.js';
 import { V3_TRADE, V3_PADS } from './gangV3.js';
+import { GangExtras } from './gangExtras.js';
 import { fairList } from './gangFair.js';
 import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
 import { NameCache } from './names.js';
@@ -150,6 +151,7 @@ export class LiveMarket extends EventEmitter {
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
     setTimeout(() => this.dexSweep(), 25_000); setInterval(() => this.dexSweep(), 60_000).unref?.();   // 没在看的已迁移币：外盘现价 / 市值
     setTimeout(() => this.launchSweep(), 5000); setInterval(() => this.launchSweep(), 15_000).unref?.();   // 已开盘的币：补发射时间（登记表 → 接口 / 链上 / DexScreener），没有 MC 的顺便补外盘市值
+    this.gx = new GangExtras(this.provider); this.gx.start(); setInterval(() => this.gx.sweep(this.tokens.values()), 3000).unref?.();   // gang.fun 回购（税收接收人是回购合约）/ 押金（GangBond），只识别展示，买卖照常
     setInterval(() => this.taxToSweep(), 3000).unref?.();   // 列表里已有的 Gang V3 币：后台补读税收接收地址（每个币只读一次）
     this.loadFairSales(); setInterval(() => this.loadFairSales(), 30_000).unref?.();   // 打新盘：gang.fun 普通代币接口不列，重启后链上订阅也不会补以前的，从打新列表接口补
     this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start(); this.setPlainOn(this.plainPref(), false); this.flapNft.start();
@@ -1264,7 +1266,7 @@ export class LiveMarket extends EventEmitter {
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, volumeH24: !!t.volumeH24, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: (t.source === 'four-agent' || t.source === 'four-plain') && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: t.source === 'four-plain' && t.feeBps == null ? null : this.sellFeePct(t),   /* 普通 Four 盘：打开后按链上成交倒推费率，之前按未知 */ antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
       chg: this.change(t),
-      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, taxTo: t.taxTo || undefined, taxToCreator: this.taxToCreator(t) || undefined, gangFair: t.gangFair || null, flapTax: t.flapTax ? { ...t.flapTax, beneficiaryName: t.flapTax.beneficiary ? this.names.peek(t.flapTax.beneficiary) : null } : null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
+      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, taxTo: t.taxTo || undefined, taxToCreator: this.taxToCreator(t) || undefined, gangBuyback: this.gx?.buyback(t) || undefined, gangBond: this.gx?.bond(t.address) || undefined, gangFair: t.gangFair || null, flapTax: t.flapTax ? { ...t.flapTax, beneficiaryName: t.flapTax.beneficiary ? this.names.peek(t.flapTax.beneficiary) : null } : null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
     };
   }
 

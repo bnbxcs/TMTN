@@ -171,6 +171,22 @@ const nftPanel = (t) => {
       <div class="nftg-w">${who}${ws.length && !ok.length ? ' <b class="r">· 没有钱包能买</b>' : ''}</div></div></div>`;
 };
 // dev 吃税（税收接收地址就是发币人自己）：分红标签变红并加「!」
+// gang.fun 回购 / 押金（2026-10-29）：回购 = V3 税币的税收接收人是 dev 的回购合约；押金 = GangBond 押金承诺。数据来自链上，照样过 esc
+const bbTip = (t) => { const b = t.gangBuyback; return `gang.fun 回购模式：税收接收人是 dev 的回购合约 ${b.splitter}\n外盘税里给 dev 的那份，${bpsTxt(b.bps)} 在外盘买回后打进 0xdead 销毁，其余给 dev\n比例 dev 随时可以调高，调低要提前 3 天公示` + (b.cut ? `\n⚠ dev 已申请调低到 ${bpsTxt(b.cut.bps)}，${fullTime(b.cut.at)} 起可生效` : ''); };
+const bbChip = (t, cls = 'tag') => (t.gangBuyback ? `<i class="${cls} bb" title="${esc(bbTip(t))}">回购 ${esc(bpsTxt(t.gangBuyback.bps))}</i>` : '');
+const bondNum = (v) => (v >= 100 ? Math.round(v).toLocaleString() : String(+Number(v).toPrecision(3)));
+const BOND_ST = { 1: '进行中', 2: '已罚没（违约，押金在外盘回购销毁）', 3: '守约到期，已退回 dev', 4: '一直没上外盘，已退回 dev' };
+const bondTip = (t) => {
+  const b = t.gangBond, q = t.quote || 'BNB';
+  return `gang.fun 押金承诺（GangBond）：${BOND_ST[b.state] || '状态 ' + b.state}${b.state === 1 && b.violated ? '\n⚠ 现在 dev 持仓低于承诺，已经可以被举报罚没' : ''}\n押金 ${bondNum(b.amount)} ${q}\ndev 承诺创建地址至少持有 ${bondNum(b.hold)} 枚（${bondNum((b.hold / 1e9) * 100)}%）`
+    + `\n持有期：${b.deadline ? '到 ' + fullTime(b.deadline) : `上外盘后开始计时，${Math.round(b.duration / 86400)} 天`}\n违约任何人可举报：1% 给举报人，其余在外盘分块回购销毁；守约到期押金退回${b.burnLeft > 0 ? `\n还剩 ${bondNum(b.burnLeft)} ${q} 等待回购销毁` : ''}\n押于 ${fullTime(b.postedAt)}`;
+};
+const bondChip = (t, cls = 'tag') => {
+  const b = t.gangBond; if (!b) return '';
+  const bad = b.state === 2 || (b.state === 1 && b.violated), off = b.state === 3 || b.state === 4;
+  const txt = b.state === 2 ? '押金已罚没' : off ? '押金已退' : `押金 ${bondNum(b.amount)} ${t.quote || 'BNB'}${b.violated ? ' !' : ''}`;
+  return `<i class="${cls} bond${bad ? ' bad' : off ? ' off' : ''}" title="${esc(bondTip(t))}">${esc(txt)}</i>`;
+};
 const divChip = (t, cls = 'tag') => (t.taxToCreator ? `<i class="${cls} div dev" title="${esc('⚠ ' + creatorTaxTip(t) + (t.gangDiv ? '\n\n' + divTip(t) : ''))}">${t.gangDiv?.taxed === false ? '不分红' : '分红'} !</i>`
   : t.gangDiv?.taxed == null ? '' : `<i class="${cls} div ${t.gangDiv.taxed ? 'on' : 'off'}" title="${esc(divTip(t))}">${t.gangDiv.taxed ? '分红' : '不分红'}</i>`);
 // 买入再卖出的预计损耗（不含价格变动）：买入费 + 卖出费（按买入后剩下的部分）+ 约 0.00017 BNB gas
@@ -188,7 +204,7 @@ const tagsHtml = (t) => {
     : t.source === 'dex' ? '<i class="tag p">外盘代币</i>'
     : t.source === 'flap-plain' || t.nftGate?.plain || /普通盘/.test(t.preset || '') ? '<i class="tag p">Flap 普通盘</i>'
     : (t.source && t.source !== 'agent-curve' ? '<i class="tag p">Flap 内盘</i>' : '<i class="tag p">Agent 曲线</i>');
-  return st + kind + `<i class="tag y">${esc(t.quote)} 池</i>` + nftChip(t) + taxChip(t) + divChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
+  return st + kind + `<i class="tag y">${esc(t.quote)} 池</i>` + nftChip(t) + taxChip(t) + divChip(t) + bbChip(t) + bondChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
 };
 const wallet = (id) => S.wallets.find((w) => w.id === id) || {};
 const eligible = (w, t) => LIVE() ? { ok: true, why: '以合约为准' } : !t || t.platform !== 'four' ? { ok: true } : t.officialTest ? { ok: false, why: '未在白名单' } : !w.agentId ? { ok: false, why: '未绑定 Agent ID' } : !w.whitelisted ? { ok: false, why: '未在白名单' } : { ok: true };
@@ -2515,7 +2531,7 @@ const defCats = (k) => (k === 'dex' ? [...CAT_KEYS] : CAT_KEYS.filter((c) => !c.
 // 旧预设（平台 + Gang 版本 + 显示普通盘）换算成分类
 const catsFromOld = (f) => CAT_KEYS.filter((c) => { const [p, v] = c.split('-'); if (!(f.plats || PLATS).includes(p)) return false; if (p === 'gang') return !f.gangVers?.length || f.gangVers.includes(v); return v === 'agent' || f.plain === true; });
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
-const defPreset = (k) => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gangVers: [], plain: k === 'dex', cats: defCats(k) } });   // plain：显示普通盘，默认关（关着服务端也不拉普通盘数据）
+const defPreset = (k) => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gx: [], gangVers: [], plain: k === 'dex', cats: defCats(k) } });   // plain：显示普通盘，默认关（关着服务端也不拉普通盘数据）
 const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
@@ -2607,7 +2623,7 @@ function tcHead(k) {
       <button class="tc-ic tc-funnel ${active ? 'act' : ''}" data-tf="${k}" title="${esc(tcFilterSummary(k))}"><svg viewBox="0 0 16 16" width="15" height="15" style="pointer-events:none"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
     </span></div>`;
 }
-function tcActive(k) { const f = P(k).f; return !!(String(f.cats || '') !== String(defCats(k)) || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
+function tcActive(k) { const f = P(k).f; return !!(String(f.cats || '') !== String(defCats(k)) || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c || f.gx?.length); }
 // 漏斗按钮的提示文字：当前预设下生效的筛选条件
 function tcFilterSummary(k) {
   const f = P(k).f, x = [];
@@ -2615,6 +2631,7 @@ function tcFilterSummary(k) {
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
   if (f.hideTax2c) x.push('隐藏 dev 吃税');
+  if (f.gx?.length) x.push('只看 ' + f.gx.map((g) => (g === 'bb' ? '回购' : '有押金')).join('/'));
   if (f.minMc || f.maxMc) x.push(`市值 ${f.minMc || 0}K~${f.maxMc || '∞'}K`);
   if (f.minAge || f.maxAge) x.push(`创建 ${f.minAge || 0}~${f.maxAge || '∞'} 分钟`);
   if (f.minHolders) x.push(`持有人 ≥ ${f.minHolders}`);
@@ -2661,6 +2678,7 @@ function tcMatch(k, t) {
     else if (mt != null && Math.max(...known) > mt + 1e-9) return false;
   }
   if (f.hideTax2c && t.taxToCreator) return false;   // 税收接收地址就是发币人自己
+  if (f.gx?.length && !f.gx.some((g) => (g === 'bb' ? t.gangBuyback : t.gangBond?.state === 1))) return false;   // 只看 gang 回购 / 有押金（两个都选 = 有其一）
   const kw = c.q.toLowerCase().split(/[,，]+/).map((x) => x.trim()).filter(Boolean);
   if (kw.length && !kw.some((w) => `${t.symbol} ${t.name} ${t.address}`.toLowerCase().includes(w))) return false;
   return true;
@@ -2683,7 +2701,7 @@ function tcCard(t, k) {
       <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}">${wnoteHtml(t.creator, devName)}</div></div>
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tc-xs')}</div>
-      <div class="tc-chips">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
+      <div class="tc-chips">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${bbChip(t, 'chip')}${bondChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
       <div class="tc-meta">${k === 'dex' && t.migratedAt ? `<span class="g" title="发射于 ${fullTime(t.migratedAt)} · 创建于 ${fullTime(t.createdAt)}">${age(t.migratedAt)}</span>` : `<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>`}${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
       <div class="tc-who">${t.firstBuyer ? `<span class="g">👑</span> 首买 ${wnoteHtml(t.firstBuyer, domOf(t.firstBuyer, t.firstBuyerName))}` : ''}${hp ? `<span class="y" title="我的钱包持有（不是首买地址）">我持有 ${K(hp.amount)}${hp.pct != null ? ` · ${hp.pct.toFixed(2)}%` : ''}</span>` : ''}</div>
@@ -2705,7 +2723,7 @@ function tlCard(t) {
       <div class="tlc-r1"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
         <span class="tlc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算' : '市值'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</span>
         <button class="tlc-ic tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tlc-ic tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tlc-ic tc-xs')}</div>
-      <div class="tlc-r2">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
+      <div class="tlc-r2">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${bbChip(t, 'chip')}${bondChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tlc-r3"><div class="tlc-bar ${curve ? '' : 'dex'}"><i style="width:${curve ? prog : 100}%"></i></div><span class="tlc-rt">${route}</span>
         ${t.viewOnly ? '<span class="tlc-buy" title="普通 Four 内盘 / genius 内盘：本终端暂不支持下单">仅行情</span>' : `<span class="tlc-buy ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}（金额在战壕对应列设置）">${TC_ST[st] || '⚡' + tcBuyLabel(t, k).replace(/^[⚡\s]*/, '')}</span>`}</div>
     </div></div>`;
@@ -2913,6 +2931,8 @@ function tfModal(k) {
       <div class="tfm-b">
         <div class="tfm-s"><div class="tfm-t"><span>分类</span><span><button class="tfm-all" data-gv3only title="只留 Gang V3（含 V3 打新）">只看 Gang V3</button> <button class="tfm-all" data-pall>全选</button></span></div>
           <div class="tfm-chips">${CATS.map(([c, l]) => `<button class="tfm-c pf-${c.split('-')[0]}${dr.cats.includes(c) ? ' on' : ''}" data-cat="${c}" title="${c.endsWith('-plain') ? (k === 'dex' ? '迁移后的普通盘（非 Agent）' : '内盘阶段的普通盘（非 Agent）：选上后服务端才开始拉这个平台的普通盘数据') : c.startsWith('gang-v3') ? 'Gang V3（含打新）' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="tfm-s"><div class="tfm-t"><span>Gang 回购 / 押金</span><span class="muted">不选 = 不限；选了只看有的（两个都选 = 有其一）</span></div>
+          <div class="tfm-chips">${[['bb', '回购', '税收接收人是 dev 的回购合约：dev 那份税按比例回购销毁'], ['bond', '有押金', 'dev 付了押金承诺持仓（进行中的押金）']].map(([g, l, tip]) => `<button class="tfm-c pf-gang${(dr.gx || []).includes(g) ? ' on' : ''}" data-gx="${g}" title="${tip}">${l}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>报价代币</span><span class="muted">不选 = 全部</span></div>
           <div class="tfm-chips">${quotes.map((q) => `<button class="tfm-c${qs.has(q) ? ' on' : ''}" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>市值（K$）</span><span class="muted">填 5 = $5K</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低，如 5"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高，如 50"/></div></div>
@@ -2936,6 +2956,7 @@ function tfModal(k) {
     if (x.cat) { const st = new Set(dr.cats); st.has(x.cat) ? (st.size > 1 && st.delete(x.cat)) : st.add(x.cat); dr.cats = CAT_KEYS.filter((c) => st.has(c)); }
     else if (x.pall != null) dr.cats = [...CAT_KEYS];
     else if (x.gv3only != null) dr.cats = ['gang-v3'];
+    else if (x.gx) { const st = new Set(dr.gx || []); st.has(x.gx) ? st.delete(x.gx) : st.add(x.gx); dr.gx = ['bb', 'bond'].filter((g) => st.has(g)); }
     else if (x.q) { const st = qset(); st.has(x.q) ? st.delete(x.q) : st.add(x.q); dr.quote = [...st].join(','); }
     else if (x.taxq != null) dr.maxTax = x.taxq;
     else if (x.reset != null) Object.assign(dr, defPreset(k).f);

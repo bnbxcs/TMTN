@@ -1299,3 +1299,9 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .fav-groups .fav-mode button.on { color: #f0b90b; }
 .hold-chip .mono.muted { color: var(--muted); }
 .fav-chip .mono.g { color: var(--g); } .fav-chip .mono.r { color: var(--r); }   /* 涨跌 / 盈亏：赚绿亏红（盖过 .fav-chip .mono 的灰白） */
+
+/* gang.fun 回购 / 押金（2026-10-29） */
+.tag.bb, .chip.bb { background: rgba(14, 203, 129, .14); color: #0ecb81; cursor: help; }
+.tag.bond, .chip.bond { background: rgba(94, 160, 255, .16); color: #7fb2ff; cursor: help; }
+.tag.bond.bad, .chip.bond.bad { background: rgba(246, 70, 93, .18); color: #f6465d; font-weight: var(--fw-strong); }
+.tag.bond.off, .chip.bond.off { background: rgba(132, 142, 156, .14); color: #848e9c; }
