@@ -392,7 +392,7 @@ export class LiveMarket extends EventEmitter {
   }
   // 创建时间超过 TRENCH_KEEP_MS 的盘子不进 / 不留在战壕（持有中 / 收藏 / 手动打开的除外）；创建时间不明（0）的不算
   ms(v) { const n = Number(v) || 0; return n > 0 && n < 1e12 ? n * 1000 : n; }   // 秒 / 毫秒都接受
-  expired(at, address) { return at > 0 && Date.now() - at > TRENCH_KEEP_MS && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
+  expired(at, address) { if (String(address || '').toLowerCase() === this._lookup) return false; return at > 0 && Date.now() - at > TRENCH_KEEP_MS && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
   autoPrune() {
     const keep = this.keepSet?.() || new Set(), now = Date.now(), by = { flap: [], four: [] };
     for (const t of [...this.tokens.values()]) if (!t.pinned && !keep.has(t.address) && t.createdAt > 0 && now - t.createdAt > TRENCH_KEEP_MS) this.tokens.delete(t.address);   // 不分来源：超过一天的都下线
@@ -672,6 +672,10 @@ export class LiveMarket extends EventEmitter {
   // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）
   async lookup(address) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
+    this._lookup = address.toLowerCase();   // 手动搜索 / 打开的币不受「超过一天不收录」限制（expired 里豁免）
+    try { return await this.lookupInner(address); } finally { this._lookup = null; }
+  }
+  async lookupInner(address) {
     let t = this.get(address);
     if (t?.source === 'flap-plain') { await this.flapNft.check(address, { plain: true, at: t.createdAt }).catch(() => null); t = this.get(address); }   // 普通盘升级成可交易的 flap-nft 普通盘
     else if (t?.source === 'four-plain' && !t._ofTried) { t._ofTried = true; await this.four.lookup(address).catch(() => null); t = this.get(address); if (t?.source === 'four-agent') t.viewOnly = false; }   // OpenFour 非 Agent 模板的盘能下单
