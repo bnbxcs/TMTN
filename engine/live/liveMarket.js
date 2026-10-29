@@ -1210,10 +1210,12 @@ export class LiveMarket extends EventEmitter {
         if (t.price) t.mcapUsd = t.price * (t.maxSupply || 1e9) * this.quoteUsd(t);
         if (t.stage === 'dex') await this.dexRefresh(t);
       } else if (t.source === 'flap-nft') {
-        await this.flapNftTax(t).catch(() => {});
-        await Promise.race([this.flapNftHistory(t, true).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {});   // 第一次补历史最多等 3 秒，补完再推一次详情
-        if (t.stage === 'curve') await this.applyFlapNftState(t, await this.flapNft.state(t.address));
-        else await this.dexRefresh(t);
+        // 税率、成交历史（K 线）、链上状态 / 外盘价三路同时读（以前一个等一个，点开要 1.5～8 秒）；历史最多等 3 秒，补完再通过 'detail' 推一次（不预加载，jak 2026-10-29）
+        await Promise.all([
+          this.flapNftTax(t).catch(() => {}),
+          Promise.race([this.flapNftHistory(t, true).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {}),
+          (t.stage === 'curve' ? this.flapNft.state(t.address).then((st) => this.applyFlapNftState(t, st)) : this.dexRefresh(t)).catch(() => {}),
+        ]);
       } else if (t.source === 'gang') {
         // 选中时拉一次较长的成交记录画 K 线（5 秒内不重复请求）
         // 已发射的不再拉：内盘不会有新成交，成交列表换成外盘的之后重拉会把同一批内盘成交重复记进 K 线成交量
