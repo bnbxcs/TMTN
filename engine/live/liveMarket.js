@@ -1412,10 +1412,51 @@ export class LiveMarket extends EventEmitter {
   // 持有人（详情页底部「持有人」，HOLDERS_FEATURE）：这个币的全部成交按地址汇总（路由买卖已经记到真实发起人），按持仓从大到小排。
   // 持仓先按买卖差估算，再给前 60 名读链上 balanceOf（Agent 曲线盘没有链上代币，只能用买卖差）；两者对不上 = 有转入 / 转出，xfer 标出来。
   // 只统计本程序拿得到的成交：内盘（Flap / Four / Gang 曲线、门槛盘）从开盘起；已迁移的币外盘（DEX）成交可能不全。金额是报价币单位。60 秒缓存
+  // 链上持有人：从创建起扫这个币的全部 Transfer 事件，按地址累加出余额（和 GMGN / BscScan 的持有人一致，不依赖本程序拿没拿到成交）。
+  // 起点按创建时间估区块（往前多留 5%）；扫完发现铸造量不够总量 = 起点晚了，再往前补，最多回到约 40 天前。之后只补新区块（离链头留 3 块防重组）。
+  // 一个币第一次扫约 15 次 getLogs（5 万块一段，节点嫌多就减半）；日志太多（> 40 万条）就停，complete=false
+  chainHolders(t) {
+    this._ch ||= new Map(); const k = t.address; let c = this._ch.get(k);
+    if (!c) { c = { bal: new Map(), from: 0, to: 0, minted: 0n, logs: 0, complete: true, p: null }; this._ch.set(k, c); if (this._ch.size > 30) this._ch.delete(this._ch.keys().next().value); }
+    return (c.p ||= this.chainHoldersRun(t, c).catch((e) => { this._ch.delete(k); throw e; }).finally(() => { c.p = null; }));   // 扫到一半出错：整份作废，下次重扫（不然余额会重复累加）
+  }
+  async chainHoldersRun(t, c) {
+    const T = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', ZERO = '0x' + '0'.repeat(40);
+    const scan = async (a, b) => {
+      for (let span = 50_000; a <= b;) {
+        const e = Math.min(b, a + span - 1); let ls;
+        try { ls = await this.provider.getLogs({ address: t.address, topics: [T], fromBlock: a, toBlock: e }); }
+        catch (er) { if (span > 1000) { span = Math.floor(span / 2); continue; } throw er; }
+        for (const l of ls) {
+          if (l.topics.length < 3) continue; const f = '0x' + l.topics[1].slice(26).toLowerCase(), to = '0x' + l.topics[2].slice(26).toLowerCase(), v = BigInt(l.data === '0x' ? 0 : l.data);
+          if (f === ZERO) c.minted += v; else c.bal.set(f, (c.bal.get(f) || 0n) - v);
+          if (to !== ZERO) c.bal.set(to, (c.bal.get(to) || 0n) + v);
+        }
+        c.logs += ls.length; if (c.logs > 400_000) { c.complete = false; return false; }
+        a = e + 1;
+      }
+      return true;
+    };
+    const head = (await this.provider.getBlockNumber()) - 3;
+    if (!c.to) {
+      const [hb, ob] = await Promise.all([this.provider.getBlock(head), this.provider.getBlock(head - 100_000)]);
+      const bt = Math.max(0.2, (hb.timestamp - ob.timestamp) / 100_000), born = (t.createdAt || Date.now()) / 1000;
+      c.from = Math.max(1, head - Math.ceil(((hb.timestamp - born) / bt) * 1.05) - 2000); c.to = c.from - 1;
+      const sup = await this.provider.call({ to: t.address, data: '0x18160ddd' }).then((r) => BigInt(r)).catch(() => 0n);
+      if (!(await scan(c.from, head))) { c.to = head; return c; } c.to = head;
+      for (let i = 0, step = 400_000; sup && c.minted * 1000n < sup * 999n && i < 20 && c.from > 1; i++) {   // 铸造的还不到总量：起点晚了，往前补
+        const a = Math.max(1, c.from - step); if (!(await scan(a, c.from - 1))) { c.from = a; break; } c.from = a;
+      }
+    } else if (head > c.to) { await scan(c.to + 1, head); c.to = head; }
+    c.at = Date.now(); return c;
+  }
+
   async holders(address) {
     const t = this.get(address); if (!t) return null;
     this._hd ||= new Map(); const c = this._hd.get(t.address); if (c && Date.now() - c.at < 60_000) return c.v;
-    const { list, complete } = await this.allTrades(t);
+    let { list, complete } = await this.allTrades(t);
+    if (t.stage !== 'curve' && t.trades?.length) list = [...new Map([...list, ...t.trades].map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()];   // 已迁移：外盘成交程序只有实时进来的那些，并进来
+    const ch = t.source !== 'agent-curve' ? await this.chainHolders(t).catch(() => null) : null;
     const m = new Map();
     for (const x of list) {
       const k = String(x.trader || '').toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(k)) continue;
@@ -1426,22 +1467,28 @@ export class LiveMarket extends EventEmitter {
     const rows = [...m.values()]; for (const r of rows) { r.net = Math.max(0, r.bT - r.sT); r.hold = r.net; r.holdSrc = 'trades'; }
     rows.sort((a, b) => b.net - a.net);
     let checked = 0;
-    if (t.source !== 'agent-curve') {
+    if (ch?.bal.size) {   // 链上余额为准：所有余额 > 0 的地址都列出来（没在成交里出现的 = 转入的 / 外盘成交没拿到的），成交里有但链上为 0 的算已清仓
+      const byK = new Map(rows.map((r) => [r.trader.toLowerCase(), r]));
+      for (const [a, v] of ch.bal) if (v > 0n && !byK.has(a)) { const r = { trader: a, name: null, buys: 0, sells: 0, bT: 0, bQ: 0, sT: 0, sQ: 0, first: 0, last: 0, net: 0 }; rows.push(r); byK.set(a, r); }
+      for (const r of rows) { const v = ch.bal.get(r.trader.toLowerCase()) || 0n; r.hold = Number(ethers.formatEther(v > 0n ? v : 0n)); r.holdSrc = 'chain'; }
+      checked = rows.filter((r) => r.hold > 0).length;
+    } else if (t.source !== 'agent-curve') {
       const cand = rows.slice(0, 60).filter((r) => r.net > 0), i = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
       for (let j = 0; j < cand.length; j += 10) await Promise.all(cand.slice(j, j + 10).map(async (r) => { try { r.hold = Number(ethers.formatEther(i.decodeFunctionResult('balanceOf', await this.provider.call({ to: t.address, data: i.encodeFunctionData('balanceOf', [r.trader]) }))[0])); r.holdSrc = 'chain'; checked++; } catch { /* 读不到就用买卖差 */ } }));
     }
     const supply = t.maxSupply || 1e9, price = t.price || 0, qUsd = this.quoteUsd(t), dust = supply * 1e-9;
     const out = rows.map((r) => {
       const avgBuy = r.bT ? r.bQ / r.bT : null, realized = avgBuy != null ? r.sQ - avgBuy * Math.min(r.sT, r.bT) : r.sQ, holdQ = r.hold * price, unrealized = avgBuy != null ? holdQ - avgBuy * r.hold : holdQ;   // 和交易者抽屉同一个算法
-      return { trader: r.trader, name: this.names.peek(r.trader) || r.name, hold: r.hold, net: r.net, holdSrc: r.holdSrc, xfer: r.holdSrc === 'chain' && Math.abs(r.hold - r.net) > Math.max(1, 0.01 * Math.max(r.hold, r.net)),
+      return { trader: r.trader, name: this.names.peek(r.trader) || r.name, hold: r.hold, net: r.net, holdSrc: r.holdSrc, xfer: r.holdSrc === 'chain' && (r.buys || r.sells) > 0 && Math.abs(r.hold - r.net) > Math.max(1, 0.01 * Math.max(r.hold, r.net)), pool: !!t.pair && r.trader.toLowerCase() === String(t.pair).toLowerCase(),
         pctSupply: (r.hold / supply) * 100, buys: r.buys, sells: r.sells, boughtTokens: r.bT, boughtQ: r.bQ, soldTokens: r.sT, soldQ: r.sQ, avgBuy, buyMcUsd: avgBuy != null && qUsd ? avgBuy * supply * qUsd : null,
         holdQ, realized, unrealized, total: realized + unrealized, pct: r.bQ ? ((realized + unrealized) / r.bQ) * 100 : null, first: r.first, last: r.last };
     });
-    const holders = out.filter((r) => r.hold > dust).sort((a, b) => b.hold - a.hold), exited = out.filter((r) => r.hold <= dust).sort((a, b) => b.total - a.total);
+    const holders = out.filter((r) => r.hold > dust).sort((a, b) => b.hold - a.hold), exited = out.filter((r) => r.hold <= dust && (r.buys || r.sells)).sort((a, b) => b.total - a.total);
     const coverage = t.source === 'agent-curve' ? 'Agent 曲线盘没有链上代币余额，持仓全部按买卖差估算'
+      : ch?.bal.size ? `持仓按链上 Transfer 汇总（${ch.complete ? '从创建起全部' : '转账太多，只汇总了一部分'}，${ch.logs} 条转账）；买卖${t.stage !== 'curve' ? '只统计本程序拿到的成交（外盘 DEX 买卖可能不全）' : '按内盘成交'}`
       : t.stage !== 'curve' ? '已迁移：只统计本程序拿到的成交（内盘从开盘起），外盘（DEX）买卖可能不全；前 60 名的持仓以链上余额为准' : '内盘成交从开盘起全部统计';
     const v = { address: t.address, symbol: t.symbol, quote: t.quote || 'BNB', qUsd, qBnb: this.bnbUsd ? qUsd / this.bnbUsd : 0, price, supply, stage: t.stage, source: t.source,
-      complete, trades: list.length, traders: rows.length, holderCount: holders.length, exitedCount: exited.length, checked, coverage, holders: holders.slice(0, 300), exited: exited.slice(0, 200), at: Date.now() };
+      complete, trades: list.length, traders: rows.length, holderCount: holders.length, exitedCount: exited.length, checked, chain: !!ch?.bal.size, coverage, holders: holders.slice(0, 300), exited: exited.slice(0, 200), at: Date.now() };
     if (qUsd > 0) { this._hd.set(t.address, { at: Date.now(), v }); if (this._hd.size > 20) this._hd.delete(this._hd.keys().next().value); }
     return v;
   }
