@@ -1298,3 +1298,4 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .fav-groups .fav-mode button svg { display: block; pointer-events: none; }
 .fav-groups .fav-mode button.on { color: #f0b90b; }
 .hold-chip .mono.muted { color: var(--muted); }
+.fav-chip .mono.g { color: var(--g); } .fav-chip .mono.r { color: var(--r); }   /* 涨跌 / 盈亏：赚绿亏红（盖过 .fav-chip .mono 的灰白） */
