@@ -40,6 +40,8 @@ const PLAIN_FILE = dataFile('plain-pools.json');   // 普通盘开关（默认�
 // 战壕只留 TRENCH_KEEP_HOURS（默认 24 小时）以内创建的盘子和代币，更老的不展示；一天里盘子过多（超过 MAX）就去掉最老的，只展示新的（jak 2026-10-29）。
 // 持有中 / 收藏（keepSet）和手动打开（pinned）的不受影响
 const TRENCH_KEEP_MS = Math.max(1, Number(env('TRENCH_KEEP_HOURS', '24'))) * 3600_000;
+// 按列再细分（jak 2026-10-29）：新创建（内盘、还没人买）只留 1 小时，即将打满（内盘、进度 > 0）6 小时，已发射（外盘，按迁移时间）24 小时。其余不加载
+const TRENCH_NEW_MS = Math.max(0.1, Number(env('TRENCH_NEW_HOURS', '1'))) * 3600_000, TRENCH_SOON_MS = Math.max(0.1, Number(env('TRENCH_SOON_HOURS', '6'))) * 3600_000;
 const AUTO_KEEP_MS = TRENCH_KEEP_MS, AUTO_MAX = Number(env('AUTO_LAUNCHED_MAX', '150')), AUTO_DUST_USD = Number(env('AUTO_LAUNCHED_MIN_MC', '3000'));
 const FOUR_TM2 = '0x5c952063c7fc8610FFDB798152D69F0B9550762b';
 const T_FOUR_LIQ = '0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0';   // LiquidityAdded(address base, uint256 offers, address quote, uint256 funds)，都在 data 里
@@ -388,14 +390,18 @@ export class LiveMarket extends EventEmitter {
     fscan();
     scan(); setInterval(scan, 60_000).unref?.();
     gscan(); setInterval(gscan, 60_000).unref?.();
-    setInterval(() => this.autoPrune(), 300_000).unref?.(); setTimeout(() => this.autoPrune(), 90_000).unref?.();   // 启动 90 秒后先清一遍超过一天的
+    setInterval(() => this.autoPrune(), 300_000).unref?.(); setTimeout(() => this.autoPrune(), 90_000).unref?.(); setInterval(() => this.trenchSweep(), 60_000).unref?.();   // 启动 90 秒后先清一遍，之后每分钟按列时限下线
   }
   // 创建时间超过 TRENCH_KEEP_MS 的盘子不进 / 不留在战壕（持有中 / 收藏 / 手动打开的除外）；创建时间不明（0）的不算
   ms(v) { const n = Number(v) || 0; return n > 0 && n < 1e12 ? n * 1000 : n; }   // 秒 / 毫秒都接受
-  expired(at, address) { if (String(address || '').toLowerCase() === this._lookup) return false; return at > 0 && Date.now() - at > TRENCH_KEEP_MS && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
+  keepMs(t) { return t.stage === 'dex' ? TRENCH_KEEP_MS : t.progress > 0 ? TRENCH_SOON_MS : TRENCH_NEW_MS; }
+  ageFrom(t) { return (t.stage === 'dex' ? t.migratedAt || t.createdAt : t.createdAt) || 0; }
+  // 每分钟：按所在列的时限下线（持有 / 收藏 / 手动打开的除外）
+  trenchSweep() { const keep = this.keepSet?.() || new Set(), now = Date.now(); for (const t of [...this.tokens.values()]) { const at = this.ageFrom(t); if (!t.pinned && !keep.has(t.address) && at > 0 && now - at > this.keepMs(t)) this.tokens.delete(t.address); } }
+  expired(at, address, lim = TRENCH_KEEP_MS) { if (String(address || '').toLowerCase() === this._lookup) return false; return at > 0 && Date.now() - at > lim && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
   autoPrune() {
     const keep = this.keepSet?.() || new Set(), now = Date.now(), by = { flap: [], four: [] };
-    for (const t of [...this.tokens.values()]) if (!t.pinned && !keep.has(t.address) && t.createdAt > 0 && now - t.createdAt > TRENCH_KEEP_MS) this.tokens.delete(t.address);   // 不分来源：超过一天的都下线
+    this.trenchSweep();   // 不分来源：超过所在列时限的都下线
     for (const t of this.tokens.values()) if (t.autoLaunched && !keep.has(t.address)) (by[t.launchPlat || 'flap'] ||= []).push(t);
     for (const list of Object.values(by)) {
       list.sort((a, b) => (b.migratedAt || b.createdAt || 0) - (a.migratedAt || a.createdAt || 0));
@@ -555,7 +561,7 @@ export class LiveMarket extends EventEmitter {
   async upsertFlapNft(g, { restore } = {}) {
     const k = g.token, existed = this.tokens.has(k);
     if (existed && this.get(k).source !== 'flap-nft' && this.get(k).source !== 'flap-plain') return;
-    if (restore && !existed && this.expired(g.at || g.seenAt, k)) return;   // 重启恢复：超过一天的老盘不进战壕（也不读链）
+    if (restore && !existed && this.expired(g.at || g.seenAt, k, g.dex ? TRENCH_KEEP_MS : TRENCH_SOON_MS)) return;   // 重启恢复：超过所在列时限的老盘不进战壕（也不读链）；内盘先按 6 小时，读到进度后 trenchSweep 再按 1 小时裁
    // flap-plain = 战壕里的 Flap 普通盘，打开 / 下单时升级成这里的普通盘
     // 先同步登记进列表（门槛 + 来源），名字 / 状态 / NFT 信息随后补上：搜索、钱包 2 收到订单时不用等这些读取
     const t = this.base(k);
@@ -781,7 +787,7 @@ export class LiveMarket extends EventEmitter {
   // gang.fun：接口给的列表（已筹 / 进度 / 价格 / FDV / 持有人）；毕业门槛按 已筹 ÷ 进度 推算
   upsertGang(it, isNew) {
     const existed = this.tokens.has(this.key(it.address));
-    if (!existed && !isNew && this.expired(this.ms(it.createdAt), it.address)) return;   // 接口列表 / 重启补回里超过一天的老盘不进战壕
+    if (!existed && !isNew && (it.graduated ? this.expired(this.ms(it.graduatedAt || it.createdAt), it.address, TRENCH_KEEP_MS) : this.expired(this.ms(it.createdAt), it.address, Number(it.progressPct) > 0 ? TRENCH_SOON_MS : TRENCH_NEW_MS))) return;   // 接口列表 / 重启补回里超过所在列时限的老盘不进战壕
     const t = this.base(it.address);
     const qa = String(it.quoteAddress || '').toLowerCase();
     if (t._qDec == null && qa && QUOTE_DEC[qa]) t._qDec = QUOTE_DEC[qa];   // 已知的非 18 位报价币（XAUt 6 位、BEM 8 位）马上用，不等链上曲线
