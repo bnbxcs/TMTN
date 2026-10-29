@@ -59,7 +59,8 @@ export class FourMeme extends EventEmitter {
     this.status = { connected: false, total: 0, head: 0, backfilledFrom: 0, lastError: null, lastPollMs: 0, rpc: maskRpc(LOG_RPC) };
   }
 
-  start() { this.loop().catch((e) => { this.status.connected = false; this.status.lastError = e.shortMessage || e.message; }); }
+  // 启动时读区块号 / 校准出错（如重启那一刻节点 TLS 断开）以前就整个停掉、Four 一直「断开」不再重试（2026-10-29）：出错 10 秒后重来
+  start() { this.loop().catch((e) => { this.status.connected = false; this.status.lastError = e.shortMessage || e.message; if (!this.sub) setTimeout(() => this.start(), 10_000); }); }
 
   async logs(topics, from, to, prov = this.provider) {
     try { const r = await prov.getLogs({ address: CORE, topics, fromBlock: from, toBlock: to }); this.status.rpcActive = this.status.rpc; return r; }
