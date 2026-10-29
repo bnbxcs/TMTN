@@ -76,6 +76,11 @@ const FLAP_PLAIN_QUOTES = new Set(['0x16cd4fe7e8880ecc3ba222795229e20489fc2c76']
 // 成交排序：同一秒（BSC 一秒两三个块）的几笔按区块号、块内日志序号排，不再按到达 / 库里的 tx 哈希顺序乱排。blk / li 只有链上事件来的成交有（Gang 内盘），其他来源没有就保持原顺序
 const chainCmp = (a, b) => ((a.blk || 0) - (b.blk || 0)) || ((a.li || 0) - (b.li || 0));
 const newFirst = (a, b) => (b.ts - a.ts) || -chainCmp(a, b), oldFirst = (a, b) => (a.ts - b.ts) || chainCmp(a, b);
+// 重启恢复时链上读取的闸门：同时最多 RESTORE_PAR 个币在读（默认 6）。以前登记表里 900 多个 Flap 门槛盘一起读，第一分钟 8000 多次请求、
+// 同时开上千条连接，家用路由器连接表被撑爆、整个家像断网，关掉程序就好（2026-10-29）
+const RESTORE_PAR = Math.max(1, Number(process.env.RESTORE_PAR) || 6);
+const restoreGate = (() => { let n = 0; const q = []; const next = () => { while (n < RESTORE_PAR && q.length) { n++; q.shift()(); } };
+  return (fn) => new Promise((res, rej) => { q.push(() => fn().then(res, rej).finally(() => { n--; next(); })); next(); }); })();
 async function infinityPriceUsd(provider, addr) {
   const p = INFINITY_POOLS[String(addr).toLowerCase()]; if (!p) return 0;
   const m = new ethers.Contract(CL_POOL_MANAGER, ['function getSlot0(bytes32) view returns (uint160,int24,uint24,uint24)'], provider);
@@ -546,17 +551,23 @@ export class LiveMarket extends EventEmitter {
     Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
       nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, plain: !!g.plain, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
     if (g.auto) t.autoLaunched = true;
-    {
-      const [st, info] = await Promise.all([this.flapNftMeta(t).catch(() => {}), this.flapNft.state(k).catch(() => null), g.plain ? null : this.flapNft.nftInfo(g.nft).catch(() => null)]).then((r) => r.slice(1));
+    // 重启恢复的老币（lite）：只读一次链上状态（价格 / 进度 → 列表里的市值），名字 / 图标用登记表里存的；税率、成交历史、外盘价
+    // 等点进去（refresh）或轮询（flapNftTick / dexSweep）再读。以前每个币启动时读 name / symbol / metaURI / 税率 / 历史全套，其中名字 956/957 个早就存着了
+    const lite = !!restore && !!(g.meta?.name && g.meta?.symbol);
+    if (lite) this.loadMeta(t, ipfsUrl(g.meta.uri));
+    const run = async () => {
+      const [st, info] = await Promise.all([lite ? null : this.flapNftMeta(t).catch(() => {}), this.flapNft.state(k).catch(() => null), g.plain ? null : this.flapNft.nftInfo(g.nft).catch(() => null)]).then((r) => r.slice(1));
       if (!g.at && g.block) { try { g.at = (await this.provider.getBlock(g.block)).timestamp * 1000; this.flapNft.save(); } catch { /* 用发现时间 */ } }
       Object.assign(t, { createdAt: g.at || g.seenAt });
       if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
       if (st) await this.applyFlapNftState(t, st);
+      if (lite) return;
       (g.auto ? Promise.resolve() : this.flapNftHistory(t)).then(() => {   // 自动收录的已开盘普通盘不补内盘成交（太多），只读外盘价
         if (t.stage === 'dex') return this.dexRefresh(t).then(() => this.emit('detail', t.address)); }).catch(() => {});   // 内盘成交从创建起补齐；已迁移的顺便读一次外盘价，列表里市值不再是「—」
       await this.flapNftTax(t).catch(() => {});
       if (!existed && !restore && t.stage === 'curve') this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - (t.createdAt || Date.now())) });
-    }
+    };
+    await (restore ? restoreGate(run) : run());
   }
   // 名字 / 代号 / 图标：读失败（节点限流等）时为空，代号留着「?」；flapNftTick 每 30 秒重试一次，直到读到为止
   async flapNftMeta(t) {

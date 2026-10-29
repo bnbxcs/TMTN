@@ -1,5 +1,6 @@
 // 实盘配置。合约地址 / 数据源来自参考版 agent-curve-terminal（Flap Agent Curve + shrine + fsi + 币安 Agentic Wallet）。
 import { readFileSync } from 'node:fs';
+import https from 'node:https';
 import { homedir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,6 +11,9 @@ try {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
   }
 } catch { /* 没有 .env 就算了 */ }
+// ethers 发 HTTP 请求用的是 Node 自带的 https 模块（没传 agent = globalAgent）：默认不限并发、每个请求都新开一条 TLS 连接。改成长连接复用 +
+// 每个节点同时最多 RPC_MAX_SOCKETS 条（默认 24），突发几千个请求时排队发，不再一下开上千条连接把家用路由器撑爆（2026-10-29）。放在 .env 读完之后
+https.globalAgent = new https.Agent({ keepAlive: true, maxSockets: Math.max(4, Number(process.env.RPC_MAX_SOCKETS) || 24), timeout: 15_000 });
 // Windows 上用记事本 / PowerShell 复制 .env 时，UTF-8 中文可能被当成 GBK 又存一遍（「币安」变「甯佸畨」）。
 // 能按 GBK 编回字节、而且这些字节正好是合法 UTF-8 的，就还原；正常中文几乎不可能满足这个条件
 let gbkMap = null;
