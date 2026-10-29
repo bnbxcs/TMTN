@@ -1292,3 +1292,9 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 /* 首买 / Dev 的名字：点击写备注 / 查域名 */
 .wnote { cursor: pointer; } .wnote:hover b, .wnote:hover .wn { text-decoration: underline dotted; }
 .tc-dev .wnote b, .tc-dev .wnote .wn { font-weight: 400; }
+/* 顶部栏 ★ 收藏 / 📈 持仓 切换 */
+.fav-mode { display: inline-flex; gap: 2px; padding-right: 6px; margin-right: 4px; border-right: 1px solid var(--line2); }
+.fav-groups .fav-mode button { width: 26px; padding: 0; display: inline-grid; place-items: center; }
+.fav-groups .fav-mode button svg { display: block; pointer-events: none; }
+.fav-groups .fav-mode button.on { color: #f0b90b; }
+.hold-chip .mono.muted { color: var(--muted); }

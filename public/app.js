@@ -724,7 +724,7 @@ function fixClosed(d) {
   for (const r of d.rows || []) { const dv = fix(r); if (!d.wallets?.length) dt += dv; }   // 合并行的成本 / 已卖出是各钱包相加的，直接重算；合计按各钱包的差额补
   add(d.totals, dt); return d;
 }
-function setHoldSnap(d) { if (!d) return; HOLD.data = fixClosed(d); HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos' || S.bottomTab === 'allpos') renderBottom(); }
+function setHoldSnap(d) { if (!d) return; HOLD.data = fixClosed(d); HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); if (favMode === 'hold' && favOn()) renderHoldStrip(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos' || S.bottomTab === 'allpos') renderBottom(); }
 function holdRow(t) {
   if (!HOLD.data) { try { HOLD.data = fixClosed(JSON.parse(localStorage.getItem('holdSnap') || 'null')); HOLD.stale = true; } catch { /* ignore */ } }
   return HOLD.data?.rows?.find((r) => r.token.toLowerCase() === String(t.address).toLowerCase()) || null;
@@ -1796,11 +1796,51 @@ let favGroup = (() => { try { return localStorage.getItem('favGroup') || '全部
 function setFav(v) { S.fav = v || { groups: ['默认'], items: {} }; try { localStorage.setItem('fav', JSON.stringify(S.fav)); } catch { /* ignore */ } renderFavBar(); scheduleRender(); if (S.view === 'pulse') { lastPulse = 0; renderPulse(); } }
 async function favOp(body) { try { setFav(await api('/api/favorites', body)); } catch (e) { toast({ status: 'failed', symbol: '收藏', reason: e.message }); } }
 function favOn() { try { return localStorage.getItem('favBar') !== '0'; } catch { return true; } }
+// 顶部栏两种内容：★ 收藏 / 📈 持仓（两个钱包合并，和「持仓」页同一份快照）
+let favMode = (() => { try { return localStorage.getItem('favMode') === 'hold' ? 'hold' : 'fav'; } catch { return 'fav'; } })();
+const favModesHtml = () => `<span class="fav-mode"><button class="${favMode === 'fav' ? 'on' : ''}" data-favmode="fav" title="收藏"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="${favMode === 'hold' ? 'on' : ''}" data-favmode="hold" title="持仓"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M3 3v18h18M7 15l4-4 3 3 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></span>`;
+// 未实现盈亏 = 现在余额价值 − 剩余数量 × 买入均价（均价 = 链上实际花的 BNB ÷ 买到的数量）。按钱包分别算再相加：合并行的均价只是第一个钱包的
+function holdUnreal(r) {
+  if (!(r.amount > 0) || r.unsynced || r.valueUsd == null) return null;
+  const bu = r.avgBuyUsd > 0 ? r.avgBuyUsd * r.amount : !(r.soldBnb > 0) && r.costUsd > 0 ? r.costUsd : null;
+  const bb = r.avgBuyBnb > 0 ? r.avgBuyBnb * r.amount : !(r.soldBnb > 0) && r.costBnb > 0 ? r.costBnb : null;
+  return bu > 0 ? { usd: r.valueUsd - bu, bnb: bb > 0 && r.valueBnb != null ? r.valueBnb - bb : null, basisUsd: bu, basisBnb: bb } : null;
+}
+function holdChips() {
+  const d = HOLD.data; if (!d) return [];
+  const parts = d.wallets?.length ? d.wallets : [{ label: '', rows: d.rows || [] }], by = new Map();
+  for (const w of parts) for (const r of w.rows || []) {
+    if (!(r.amount > 0) || r.unsynced) continue;
+    const k = String(r.token).toLowerCase(); let c = by.get(k);
+    if (!c) by.set(k, (c = { token: r.token, symbol: r.symbol, name: r.name, image: r.image, platform: r.platform, amount: 0, supplyPct: 0, valueUsd: 0, valueBnb: 0, noVal: false, uUsd: 0, uBnb: 0, basisUsd: 0, noU: false, ws: [] }));
+    c.amount += r.amount; c.supplyPct += r.supplyPct || 0;
+    if (r.valueUsd == null) c.noVal = true; else { c.valueUsd += r.valueUsd; c.valueBnb += r.valueBnb || 0; }
+    const u = holdUnreal(r); if (!u) c.noU = true; else { c.uUsd += u.usd; c.uBnb += u.bnb || 0; c.basisUsd += u.basisUsd; }
+    if (w.label) c.ws.push(w.label);
+  }
+  return [...by.values()].filter((c) => c.noVal || c.valueBnb >= 0.0005).sort((a, b) => b.valueUsd - a.valueUsd);   // 小额（< 0.0005 BNB）不显示，和「隐藏小额」一样
+}
+let favHoldHtml = '';
+function renderHoldStrip() {
+  if (!HOLD.data) { try { HOLD.data = fixClosed(JSON.parse(localStorage.getItem('holdSnap') || 'null')); HOLD.stale = true; } catch { /* ignore */ } }
+  const list = holdChips();
+  const html = list.length ? list.map((c) => {
+    const t = S.tokens.get(c.token) || [...S.tokens.values()].find((x) => x.address.toLowerCase() === c.token.toLowerCase());
+    const mc = t?.mcapUsd || (!c.noVal && c.supplyPct > 0 ? c.valueUsd / (c.supplyPct / 100) : null);
+    const pct = !c.noU && c.basisUsd > 0 ? (c.uUsd / c.basisUsd) * 100 : null;
+    const pnl = c.noU || c.noVal ? '<span class="mono muted">—</span>' : `<span class="mono ${c.uUsd >= 0 ? 'g' : 'r'}" title="未实现盈亏 ${c.uBnb >= 0 ? '+' : '−'}${bnb(Math.abs(c.uBnb), 5)} BNB">${c.uUsd >= 0 ? '+' : '−'}$${Math.abs(c.uUsd).toFixed(2)}${pct != null ? ` ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : ''}</span>`;
+    const tip = `${esc(t?.name || c.name || c.symbol || '')} · 持仓价值 ${c.noVal ? '—' : '$' + c.valueUsd.toFixed(2) + '（' + bnb(c.valueBnb, 5) + ' BNB）'}${t?.priceUsd ? ' · 单价 $' + sub(t.priceUsd) : ''}${c.ws.length ? ' · ' + esc(c.ws.join(' + ')) : ''} · 未实现盈亏 = 余额价值 − 剩余数量 × 买入均价（链上实付 BNB）`;
+    return `<span class="fav-chip hold-chip" data-holdopen="${esc(c.token)}" title="${tip}">${logoHtml(t || { ...c, address: c.token }, 'xs')}<b>${esc(t?.symbol || c.symbol || short(c.token))}</b><span class="mono">${mc ? usd(mc) : '—'}</span>${pnl}</span>`;
+  }).join('') : `<span class="fav-empty">${HOLD.data ? '暂无持仓' : '持仓加载中…'}</span>`;
+  if (html !== favHoldHtml || !$('#favStrip').firstChild) { favHoldHtml = html; $('#favStrip').innerHTML = html; }
+}
 function renderFavBar() {
   document.body.classList.toggle('fav-on', favOn()); $('#favToggle').classList.toggle('on', favOn());
   if (!favOn()) return;
+  if (favMode === 'hold') { const fg = $('#favGroups'); if (fg.dataset.m !== 'hold') { fg.innerHTML = favModesHtml(); fg.dataset.m = 'hold'; } return renderHoldStrip(); }
+  favHoldHtml = ''; $('#favGroups').dataset.m = 'fav';
   const gs = ['全部', ...S.fav.groups]; if (!gs.includes(favGroup)) favGroup = '全部';
-  $('#favGroups').innerHTML = gs.map((g) => `<button class="${g === favGroup ? 'on' : ''}" data-favg="${esc(g)}">${esc(g)}</button>`).join('') + '<button data-favmgr title="管理分组">⚙</button>';
+  $('#favGroups').innerHTML = favModesHtml() + gs.map((g) => `<button class="${g === favGroup ? 'on' : ''}" data-favg="${esc(g)}">${esc(g)}</button>`).join('') + '<button data-favmgr title="管理分组">⚙</button>';
   const list = Object.entries(S.fav.items).filter(([, v]) => favGroup === '全部' || v.group === favGroup).sort((a, b) => b[1].at - a[1].at);
   $('#favStrip').innerHTML = list.length ? list.map(([a, v]) => {
     const t = S.tokens.get(a) || [...S.tokens.values()].find((x) => x.address.toLowerCase() === a);
@@ -1808,7 +1848,7 @@ function renderFavBar() {
     return `<span class="fav-chip" data-favopen="${a}" title="${esc(t?.name || v.symbol)} · ${esc(v.group)}">${t ? logoHtml(t, 'xs') : ''}<b>${esc(t?.symbol || v.symbol || short(a))}</b><span class="mono">${t ? usd(t.mcapUsd) : '—'}</span>${ch != null ? `<span class="mono ${ch >= 0 ? 'g' : 'r'}">${ch >= 0 ? '+' : ''}${ch.toFixed(1)}%</span>` : ''}</span>`;
   }).join('') : `<span class="fav-empty">${favGroup === '全部' ? '还没有收藏：点代币名字左边的 ★' : '这个分组还没有收藏'}</span>`;
 }
-setInterval(() => { if (favOn() && Object.keys(S.fav.items).length) renderFavBar(); }, 3000);
+setInterval(() => { if (favOn() && (favMode === 'hold' || Object.keys(S.fav.items).length)) renderFavBar(); }, 3000);
 function favMenu(btn, a) {
   $('.fav-menu')?.remove(); const t = S.tokens.get(a); const cur = S.fav.items[a.toLowerCase()];
   const m = document.createElement('div'); m.className = 'fav-menu';
@@ -1835,6 +1875,8 @@ document.addEventListener('click', (e) => {
   const st = e.target.closest('[data-fav]'); if (st) { e.preventDefault(); e.stopPropagation(); const a = st.dataset.fav; const t = S.tokens.get(a);
     if (!isFav(a)) favOp({ op: 'set', address: a, group: '默认', symbol: t?.symbol, platform: t?.platform }).then(() => favMenu(st, a)); else favMenu(st, a); return; }
   const q = e.target.closest('[data-favq]'); if (q) { e.preventDefault(); e.stopPropagation(); const a = q.dataset.favq, t = S.tokens.get(a); return isFav(a) ? favOp({ op: 'remove', address: a }) : favOp({ op: 'set', address: a, group: '默认', symbol: t?.symbol, platform: t?.platform }); }
+  const fm = e.target.closest('[data-favmode]'); if (fm) { favMode = fm.dataset.favmode === 'hold' ? 'hold' : 'fav'; try { localStorage.setItem('favMode', favMode); } catch { /* ignore */ } if (favMode === 'hold' && !HOLD.data && typeof loadHold === 'function') loadHold(); return renderFavBar(); }
+  const ho = e.target.closest('[data-holdopen]'); if (ho) { const a = ho.dataset.holdopen.toLowerCase(); const t = S.tokens.get(ho.dataset.holdopen) || [...S.tokens.values()].find((x) => x.address.toLowerCase() === a); if (t) return openToken(t); setView('trade'); return select(ho.dataset.holdopen); }
   const g = e.target.closest('[data-favg]'); if (g) { favGroup = g.dataset.favg; try { localStorage.setItem('favGroup', favGroup); } catch { /* ignore */ } return renderFavBar(); }
   if (e.target.closest('[data-favmgr]')) return favManage();
   const c = e.target.closest('[data-favopen]'); if (c) { const a = c.dataset.favopen; const t = S.tokens.get(a) || [...S.tokens.values()].find((x) => x.address.toLowerCase() === a);
