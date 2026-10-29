@@ -687,8 +687,11 @@ export class LiveMarket extends EventEmitter {
     this._gv2 ||= new GangV2(this.provider, null);
     const { pad, c } = await this._gv2.curve(address);
     const a = address.toLowerCase(), erc = new ethers.Contract(address, ['function name() view returns (string)', 'function symbol() view returns (string)'], this.provider);
-    // gang.fun /api/tokens/<CA>（约 0.15 秒）：创建时间、持有人、成交笔数；接口没收录就用现在的时间
-    const [name, symbol, info] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?'), fetch('https://gang.fun/api/tokens/' + a, { signal: AbortSignal.timeout(3000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+    // gang.fun /api/tokens/<CA>（V2）或 /api/v3/tokens/<CA>（V3，V2 接口查不到）（约 0.15 秒）：创建时间、持有人、成交笔数；两个都没收录才用现在的时间
+    // 以前只查 V2 接口：V3 老盘（持仓 / 收藏重启时补回、搜索打开）全被记成「刚创建」，排到「新创建」列最上面
+    const api = (u) => fetch(u + a, { signal: AbortSignal.timeout(3000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [name, symbol, i2, i3] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?'), api('https://gang.fun/api/tokens/'), api('https://gang.fun/api/v3/tokens/')]);
+    const info = (c.v3 ? i3 || i2 : i2 || i3) || null;
     const q = String(c.quote).toLowerCase(), wb = q === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' || c.quote === ethers.ZeroAddress, quoteSymbol = wb ? 'BNB' : await this.gangChain.symbolOf(q);
     // 已筹 / 目标 / 进度从链上曲线读（以前收录时都是 0，页面显示 0/15、0.00%）
     const dec = wb ? 18 : await this._gv2.decimals(q).catch(() => 18), raised = Number(ethers.formatUnits(BigInt(c.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(c.gradAmt || 0), dec));
@@ -710,6 +713,7 @@ export class LiveMarket extends EventEmitter {
       for (const x of j?.items || []) {
         // 已经由链上 Created 事件收录的 V3 盘：事件里已筹 / 进度是 0，gang.fun 的 V2 列表又不收 V3，以前就一直显示 0/15。这里按接口刷新已筹 / 目标 / 进度，没有图标的补上
         const ex = x?.address && this.get(x.address);
+        if (ex && ex.source === 'gang' && x.createdAt > 0 && Math.abs(ex.createdAt - x.createdAt * 1000) > 60_000) ex.createdAt = x.createdAt * 1000;   // 收录时没拿到真实创建时间（记成了收录那一刻）的：按接口改回来
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v1') { ex.gangTrack = 'v3'; this.gangV2Curve(ex).catch(() => {}); }   // 在 V3 列表里却被标成老盘的（链上收录时 track 丢了）：改回 V3，战壕和买卖才走对
         if (ex && ex.source === 'gang' && /^v3/.test(ex.gangTrack || '') && x.graduated && ex.stage === 'curve') {   // V3 盘发射时链上没有事件推给我们：按接口状态移到「已发射」，以前要重启才过去
           Object.assign(ex, { stage: 'dex', progress: 100, pair: x.pair || ex.pair || null }); ex.migratedAt ||= x.graduatedAt ? x.graduatedAt * 1000 : this.migNow() || undefined; this.emit('migrate', this.summary(ex));
