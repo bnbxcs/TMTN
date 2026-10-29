@@ -413,8 +413,11 @@ export class LiveMarket extends EventEmitter {
       let np = 0; for (const x of this.tokens.values()) if (PLAIN_SOURCES.has(x.source)) np++;
       if (this.tokens.size - np > MAX) {   // 普通盘自己限量（plainPools.prune），不占这 1000 个名额
         const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
-        const old = [...this.tokens.values()].filter((t) => !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && t.source !== 'flap-nft' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
-        if (old) { this.tokens.delete(old.address); this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）
+        // 2026-10-29：Flap 门槛盘 970 多个把 1000 个名额占满后，新来的 gang 盘自己成了唯一可淘汰的，刚加进来就被踢掉，_evictFloor 还被设成「现在」，
+        // 之后接口里的 gang 盘全被拒收（「新创建」里没有 gang 盘）。改成：正在加的这个币不淘汰；6 小时以上没人买过（raised = 0）的 Flap 门槛内盘可以淘汰
+        const now = Date.now(), deadFlap = (t) => t.source === 'flap-nft' && t.stage === 'curve' && !(t.raised > 0) && now - (t.createdAt || now) > 6 * 3600_000;
+        const old = [...this.tokens.values()].filter((t) => t.address !== k && !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && (t.source !== 'flap-nft' || deadFlap(t)) && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (old) { this.tokens.delete(old.address); if (old.source !== 'flap-nft') this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）；淘汰没人买的 Flap 盘不算
       }
     }
     return this.tokens.get(k);
