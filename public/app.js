@@ -886,13 +886,24 @@ function drawChart() {
   for (const t of [...(S.detail?.trades || []).filter((x) => isMe(x.trader)), ...((S.detail && HOLD.data?.rows?.find((r) => r.token.toLowerCase() === S.detail.address.toLowerCase())?.trades) || [])]) {
     const k = String(t.tx || '').toLowerCase(); if (!k || seen.has(k)) continue; seen.add(k); mine.push(t);
   }
-  const mk = S.selected + ':' + mine.map((t) => t.tx + t.side).join(',');
+  // 发币人（dev）的买卖：后端单独记的 devTrades + 最近成交里成交人 = 创建者的，按 tx 去重。和 GMGN 一样标 DB（dev 买，绿）/ DS（dev 卖，红）
+  const dev = [], cr = String(S.detail?.creator || '').toLowerCase(), dseen = new Set();
+  if (cr) for (const t of [...(S.detail?.devTrades || []), ...(S.detail?.trades || []).filter((x) => String(x.trader || '').toLowerCase() === cr)]) {
+    const k = String(t.tx || '').toLowerCase() + t.side; if (!t.tx || dseen.has(k)) continue; dseen.add(k); dev.push(t);
+  }
+  const mk = S.selected + ':' + mine.map((t) => t.tx + t.side).join(',') + '|' + dev.map((t) => t.tx + t.side).join(',');
   if (mk !== CH.markers) {
     CH.markers = mk;
     // 早于第一根 K 线的成交（K 线历史不全时）不标：库会把它们全挤到第一根上
-    const t0 = all.length ? all[0].t : Infinity;
-    candles.setMarkers(mine.filter((t) => Math.floor(t.ts / 1000 / S.interval) * S.interval >= t0).map((t) => ({ time: Math.floor(t.ts / 1000 / S.interval) * S.interval + tz, position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: t.side === 'buy' ? CT.up : CT.down, shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', text: t.side === 'buy' ? '买' : '卖' })).sort((a, b) => a.time - b.time));
+    const t0 = all.length ? all[0].t : Infinity, bt = (t) => Math.floor(t.ts / 1000 / S.interval) * S.interval;
+    const mm = mine.filter((t) => bt(t) >= t0).map((t) => ({ time: bt(t) + tz, position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
+      color: t.side === 'buy' ? CT.up : CT.down, shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', text: t.side === 'buy' ? '买' : '卖' }));
+    // 同一根 K 线上 dev 卖了好几笔只标一个 DS（买同理），文字带笔数，不然一串标记叠在一起看不清
+    const per = new Map();
+    for (const t of dev) { if (bt(t) < t0) continue; const k = bt(t) + t.side; const o = per.get(k); if (o) o.n++; else per.set(k, { time: bt(t) + tz, side: t.side, n: 1 }); }
+    const dm = [...per.values()].map((d) => ({ time: d.time, position: d.side === 'buy' ? 'belowBar' : 'aboveBar', color: d.side === 'buy' ? CT.up : CT.down, shape: 'circle', size: 1.4,
+      text: (d.side === 'buy' ? 'DB' : 'DS') + (d.n > 1 ? '×' + d.n : '') }));
+    candles.setMarkers([...mm, ...dm].sort((a, b) => a.time - b.time));
   }
 }
 chart.subscribeCrosshairMove((p) => {

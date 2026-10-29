@@ -854,7 +854,7 @@ export class LiveMarket extends EventEmitter {
     const q = this.quoteUsd(t);
     t.candles = (t.candles || []).filter((c) => c.dex);
     let buys = 0, sells = 0, vol = 0;
-    for (const x of list) { if (x.side === 'buy') buys++; else sells++; vol += x.bnb || 0; if (x.price) this.pushCandle(t, x.ts, x.price, x.bnb || 0); }
+    for (const x of list) { if (x.side === 'buy') buys++; else sells++; vol += x.bnb || 0; if (x.price) this.pushCandle(t, x.ts, x.price, x.bnb || 0); this.noteDev(t, x); }
     Object.assign(t, { buys: Math.max(t.buys || 0, buys), sells: Math.max(t.sells || 0, sells), volume: Math.max(t.volume || 0, vol) });
     const seen = new Set(t.trades.map((x) => `${x.tx}:${x.side}`));
     for (const x of list.slice(-100)) if (!seen.has(`${x.tx}:${x.side}`)) t.trades.push({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx, usd: x.bnb * q, mcapUsd: x.price * (t.maxSupply || 1e9) * q, name: this.names.peek(x.trader) });
@@ -1036,7 +1036,13 @@ export class LiveMarket extends EventEmitter {
   }
 
   // 记下这个币最早的一笔买入（trades 只留 100 条，所以单独存）
-  noteFirstBuy(t, tr) { if (tr?.side === 'buy' && tr.trader && (!t.firstBuy || oldFirst(tr, t.firstBuy) < 0)) t.firstBuy = { ts: tr.ts, trader: tr.trader, blk: tr.blk, li: tr.li }; }   // 同一秒的几笔按区块 / 块内序号比，谁先上链谁是首买
+  noteFirstBuy(t, tr) { if (tr?.side === 'buy' && tr.trader && (!t.firstBuy || oldFirst(tr, t.firstBuy) < 0)) t.firstBuy = { ts: tr.ts, trader: tr.trader, blk: tr.blk, li: tr.li }; this.noteDev(t, tr); }   // 同一秒的几笔按区块 / 块内序号比，谁先上链谁是首买
+  // 发币人自己的买卖（K 线上标 DB / DS）：成交列表只留最近 100 笔，dev 早期的买入、后来的卖出常被挤掉，单独记一份（按 tx + 方向去重，最多 200 笔）
+  noteDev(t, tr) {
+    if (!t.creator || !tr?.trader || !tr.tx || String(tr.trader).toLowerCase() !== String(t.creator).toLowerCase()) return;
+    t.devTrades ||= []; if (t.devTrades.some((x) => x.tx === tr.tx && x.side === tr.side)) return;
+    t.devTrades.push({ ts: tr.ts, side: tr.side, bnb: tr.bnb, tokens: tr.tokens, tx: tr.tx }); t.devTrades.sort(newFirst); if (t.devTrades.length > 200) t.devTrades.length = 200;
+  }
 
   // 成交美元用的报价币价格。Flap Portal 盘在第一次读到 Portal 状态之前不知道计价币（base() 默认写的是 BNB）：这时返回 0，成交先不定美元（页面按现价换算），
   // 读到以后 revalueTrades 重算。以前按 BNB 价估，BNCB 计价盘的首笔买入 14 BNCB 显示成 $10,738（AIvirus 0x6442…7777 2026-10-28）
@@ -1090,6 +1096,7 @@ export class LiveMarket extends EventEmitter {
     for (let k = s.length - 1; k >= 0 && s[k].ts >= day; k--) { v += s[k].bnb; if (s[k].side === 'buy') nb++; else ns++; }
     const from = s.length ? s[0].ts / 1000 : Infinity; for (const c of hist) if (c.t * 1000 >= day && c.t < Math.floor(from / 60) * 60) v += c.v;   // 链上读不到的更早部分用 GeckoTerminal 分钟线的成交量
     Object.assign(t, { dexVol24: v, dexBuys24: nb, dexSells24: ns, dexCountMin: s.length ? Math.max(1, Math.round((Date.now() - Math.max(day, s[0].ts)) / 60_000)) : 0 });   // 买卖笔数只有链上读到的这段（约 1 小时）
+    if (t.creator) for (const x of s) this.noteDev(t, x);
     const recent = s.slice(-100).reverse().map((x) => ({ ...x, usd: x.bnb * q, mcapUsd: x.price * (t.maxSupply || 1e9) * q, name: x.trader ? this.names.peek(x.trader) : null }));
     t.trades = [...recent, ...t.trades.filter((x) => !x.dex)].sort(newFirst).slice(0, 100);
   }
@@ -1519,7 +1526,11 @@ export class LiveMarket extends EventEmitter {
   list() { return [...this.tokens.values()].map((t) => this.summary(t)); }
   // 成交记录带上钱包域名（只读缓存，没有就是 null）
   named(rows) { return rows.map((r) => ({ ...r, name: r.name || this.names.peek(r.trader) })); }
-  detail(a) { const t = this.get(a); if (!t) return null; return { ...this.summary(t), candles: compactCandles(t.candles, 1800), trades: this.named(t.trades.slice(0, 60)) }; }
+  detail(a) {
+    const t = this.get(a); if (!t) return null;
+    if (t.creator) for (const x of t.trades) this.noteDev(t, x);   // 发币人是后来才知道的：最近成交里已有的 dev 成交补进来
+    return { ...this.summary(t), candles: compactCandles(t.candles, 1800), trades: this.named(t.trades.slice(0, 60)), devTrades: t.devTrades || [] };
+  }
 
   netStatus() {
     const l = this.feeds.status.launch;
