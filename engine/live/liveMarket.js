@@ -893,7 +893,7 @@ export class LiveMarket extends EventEmitter {
     this.addTrade(t, trade);
     // V3 内盘：每笔实时成交后 1 秒内重读一次链上曲线（已筹 / 进度 / 底池 / 剩余），不等 20 秒节流和接口轮询
     if (live && t.gangTrack === 'v3' && t.stage === 'curve' && !t._curveQ) t._curveQ = setTimeout(() => { t._curveQ = null; t._v2At = 0; this.gangV2Curve(t).catch(() => {}); }, 800);
-    if (k !== 1 && trade.price > 0 && trade.ts >= (t.lastTradeAt || 0) - 1) { const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }   // 接口的 fdvUsd 也按 18 位算错了，用成交价重算
+    if ((k !== 1 || t.gangTrack === 'v3') && trade.price > 0 && trade.ts >= (t.lastTradeAt || 0) - 1) { const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }   // 接口的 fdvUsd 也按 18 位算错了，用成交价重算；V3 不在接口轮询里，市值只能靠成交价更新（GANGBALL 0xb1f2… 2026-10-29 一直停在开盘时的 $3.5K，被「即将打满」市值下限筛掉）
     if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: trade.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });   // Gang V2 的金额是报价币（GANG / BNCB…），按报价币价格换美元
   }
 
