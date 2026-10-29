@@ -174,7 +174,7 @@ const nftPanel = (t) => {
 // gang.fun 回购 / 押金（2026-10-29）：回购 = V3 税币的税收接收人是 dev 的回购合约；押金 = GangBond 押金承诺。数据来自链上，照样过 esc
 const bbTip = (t) => { const b = t.gangBuyback; return `gang.fun 回购模式：税收接收人是 dev 的回购合约 ${b.splitter}\n外盘税里给 dev 的那份，${bpsTxt(b.bps)} 在外盘买回后打进 0xdead 销毁，其余给 dev\n比例 dev 随时可以调高，调低要提前 3 天公示` + (b.cut ? `\n⚠ dev 已申请调低到 ${bpsTxt(b.cut.bps)}，${fullTime(b.cut.at)} 起可生效` : ''); };
 const bbChip = (t, cls = 'tag') => (t.gangBuyback ? `<i class="${cls} bb" title="${esc(bbTip(t))}">回购 ${esc(bpsTxt(t.gangBuyback.bps))}</i>` : '');
-const bondNum = (v) => (v >= 100 ? Math.round(v).toLocaleString() : String(+Number(v).toPrecision(3)));
+const bondNum = (v) => (v >= 1e3 ? K(v).replace(/\.?0+(?=[KMB])/, '') : String(+Number(v).toPrecision(3)));   // 1.18M / 20M / 0.5，不用逗号长数字（jak 2026-10-29）
 const BOND_ST = { 1: '进行中', 2: '已罚没（违约，押金在外盘回购销毁）', 3: '守约到期，已退回 dev', 4: '一直没上外盘，已退回 dev' };
 const bondTip = (t) => {
   const b = t.gangBond, q = t.quote || 'BNB';
