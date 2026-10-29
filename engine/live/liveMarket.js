@@ -415,7 +415,7 @@ export class LiveMarket extends EventEmitter {
         const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
         // 2026-10-29：Flap 门槛盘 970 多个把 1000 个名额占满后，新来的 gang 盘自己成了唯一可淘汰的，刚加进来就被踢掉，_evictFloor 还被设成「现在」，
         // 之后接口里的 gang 盘全被拒收（「新创建」里没有 gang 盘）。改成：正在加的这个币不淘汰；6 小时以上没人买过（raised = 0）的 Flap 门槛内盘可以淘汰
-        const now = Date.now(), deadFlap = (t) => t.source === 'flap-nft' && t.stage === 'curve' && !(t.raised > 0) && now - (t.createdAt || now) > 6 * 3600_000;
+        const now = Date.now(), deadFlap = (t) => t.source === 'flap-nft' && t.stage === 'curve' && t._stOk && !(t.raised > 0) && now - (t.createdAt || now) > 6 * 3600_000;
         const old = [...this.tokens.values()].filter((t) => t.address !== k && !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && (t.source !== 'flap-nft' || deadFlap(t)) && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
         if (old) { this.tokens.delete(old.address); if (old.source !== 'flap-nft') this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）；淘汰没人买的 Flap 盘不算
       }
@@ -563,7 +563,7 @@ export class LiveMarket extends EventEmitter {
       if (!g.at && g.block) { try { g.at = (await this.provider.getBlock(g.block)).timestamp * 1000; this.flapNft.save(); } catch { /* 用发现时间 */ } }
       Object.assign(t, { createdAt: g.at || g.seenAt });
       if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
-      if (st) await this.applyFlapNftState(t, st);
+      if (st) { await this.applyFlapNftState(t, st); t._stOk = true; }   // 读到过链上状态（raised 可信）才允许按「没人买」淘汰
       if (lite) return;
       (g.auto ? Promise.resolve() : this.flapNftHistory(t)).then(() => {   // 自动收录的已开盘普通盘不补内盘成交（太多），只读外盘价
         if (t.stage === 'dex') return this.dexRefresh(t).then(() => this.emit('detail', t.address)); }).catch(() => {});   // 内盘成交从创建起补齐；已迁移的顺便读一次外盘价，列表里市值不再是「—」
