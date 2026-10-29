@@ -763,7 +763,7 @@ body.fav-on .favbar { display: flex; }
 .tcb > .tcard .tc-n { height: 24px; flex: none; align-items: center; }
 .tcb > .tcard .tc-fav, .tcb > .tcard .tc-hide { width: 24px; height: 24px; }
 .tcb > .tcard .tc-chips { height: 16px; flex: none; flex-wrap: nowrap; overflow: hidden; }
-.tcb > .tcard .tc-chips > .chip { flex: none; white-space: nowrap; }   /* 一行放不下时整枚标签挤出去，不再把每个标签压成一个字（「税」「不」看不到数值，jak 2026-10-29） */
+.tcb > .tcard .tc-chips > .chip { flex: none; white-space: nowrap; }   /* 一行放不下时整枚标签挤出去，不再把每个标签压成一个字（「税」「不」看不到数值） */
 .tcb > .tcard .tc-meta { height: 15px; flex: none; line-height: 15px; }
 .tcb > .tcard .tc-route { height: 16px; flex: none; line-height: 14px; box-sizing: border-box; }
 .tcb > .tcard .tc-who { height: 13px; flex: none; line-height: 13px; font-size: 10.5px; }

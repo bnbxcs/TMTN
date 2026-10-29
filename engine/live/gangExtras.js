@@ -1,4 +1,4 @@
-// gang.fun 回购 / 押金（2026-10-29，jak：「gang 回购模式，还要付押金的选项，加到 tmtn，战壕也要显示」）
+// gang.fun 回购 / 押金（2026-10-29）：识别 gang 的回购模式和押金承诺，战壕里显示标签、可以筛选
 // 依据：官方公开仓库 github.com/gangfun/gang-launchpad（src/gang/GangBuybackSplitter.sol、GangBond.sol，docs/MAINNET-BUYBACK-SPLITTER-2026-10-28.md、MAINNET-GANG-BOND-2026-10-29.md）
 // 两个都只是 GangLaunchpad（V3 曲线 / 打新）上的附加合约，买卖路径不变，这里只识别和展示：
 // - 回购：V3 税币的税收接收地址（taxConfigOf(token).recipient）是 dev 的 GangBuybackSplitter 克隆。dev 那份税按 buybackBps 在外盘回购打进 0xdead，
