@@ -37,7 +37,10 @@ const LAUNCH_FILE = dataFile('launched-at-v2.json'), LAUNCH_OLD = dataFile('laun
 const AUTO_LAUNCHED = env('AUTO_LAUNCHED', '1') !== '0';
 const AUTO_FILE = dataFile('auto-launched.json');
 const PLAIN_FILE = dataFile('plain-pools.json');   // 普通盘开关（默认关）
-const AUTO_KEEP_MS = 48 * 3600_000, AUTO_MAX = Number(env('AUTO_LAUNCHED_MAX', '150')), AUTO_DUST_USD = Number(env('AUTO_LAUNCHED_MIN_MC', '3000'));
+// 战壕只留 TRENCH_KEEP_HOURS（默认 24 小时）以内创建的盘子和代币，更老的不展示；一天里盘子过多（超过 MAX）就去掉最老的，只展示新的（jak 2026-10-29）。
+// 持有中 / 收藏（keepSet）和手动打开（pinned）的不受影响
+const TRENCH_KEEP_MS = Math.max(1, Number(env('TRENCH_KEEP_HOURS', '24'))) * 3600_000;
+const AUTO_KEEP_MS = TRENCH_KEEP_MS, AUTO_MAX = Number(env('AUTO_LAUNCHED_MAX', '150')), AUTO_DUST_USD = Number(env('AUTO_LAUNCHED_MIN_MC', '3000'));
 const FOUR_TM2 = '0x5c952063c7fc8610FFDB798152D69F0B9550762b';
 const T_FOUR_LIQ = '0xc18aa71171b358b706fe3dd345299685ba21a5316c66ffa9e319268b033c44b0';   // LiquidityAdded(address base, uint256 offers, address quote, uint256 funds)，都在 data 里
 // genius.fun（genius.fun/docs/integrate、/contracts/manifest.json）：工厂发 PoolGraduated(address indexed token, …) = 毕业建好 PancakeSwap Infinity CL 池（锁仓），之后外盘交易。
@@ -144,7 +147,7 @@ export class LiveMarket extends EventEmitter {
     this.four.on('trade', (tr) => this.onFourTrade(tr));
     // 列表满 1000 时 gang.fun 接口每 5 秒给的老盘（比最近淘汰的还老）不再收录：以前每次轮询都是「加进来 → 马上被淘汰 → 下次再加」，
     // 一轮一百多个币反复进出（每个都要排序淘汰、读一次报价币 decimals），白白占 CPU 和每分钟几百次 eth_call。链上新盘 / 搜索不受影响
-    this.gang.on('token', (it, { isNew }) => { if (!isNew && this.tokens.size >= MAX && !this.tokens.has(this.key(it.address)) && (Number(it.createdAt) || 0) * 1000 <= (this._evictFloor || 0)) return; this.upsertGang(it, isNew); });
+    this.gang.on('token', (it, { isNew }) => { if (!isNew && !this.tokens.has(this.key(it.address)) && this.expired((Number(it.createdAt) || 0) * 1000, it.address)) return; if (!isNew && this.tokens.size >= MAX && !this.tokens.has(this.key(it.address)) && (Number(it.createdAt) || 0) * 1000 <= (this._evictFloor || 0)) return; this.upsertGang(it, isNew); });
     setInterval(() => { for (const t of this.tokens.values()) if (t.source === 'gang' && t.gangTrack === 'v3fair' && t.stage === 'curve') this.gangFairState(t).catch(() => {}); }, 15_000).unref?.();   // 打新盘：进度 / 是否已发射从 pad 读
     this.gang.on('trade', (tr, { live }) => this.onGangTrade(tr, live));
     this.feeds.on('launch', (l) => this.upsertShrine(l));
@@ -385,10 +388,13 @@ export class LiveMarket extends EventEmitter {
     fscan();
     scan(); setInterval(scan, 60_000).unref?.();
     gscan(); setInterval(gscan, 60_000).unref?.();
-    setInterval(() => this.autoPrune(), 300_000).unref?.();
+    setInterval(() => this.autoPrune(), 300_000).unref?.(); setTimeout(() => this.autoPrune(), 90_000).unref?.();   // 启动 90 秒后先清一遍超过一天的
   }
+  // 创建时间超过 TRENCH_KEEP_MS 的盘子不进 / 不留在战壕（持有中 / 收藏 / 手动打开的除外）；创建时间不明（0）的不算
+  expired(at, address) { return at > 0 && Date.now() - at > TRENCH_KEEP_MS && !(this.keepSet?.() || new Set()).has(String(address || '').toLowerCase()); }
   autoPrune() {
     const keep = this.keepSet?.() || new Set(), now = Date.now(), by = { flap: [], four: [] };
+    for (const t of [...this.tokens.values()]) if (!t.pinned && !keep.has(t.address) && t.createdAt > 0 && now - t.createdAt > TRENCH_KEEP_MS) this.tokens.delete(t.address);   // 不分来源：超过一天的都下线
     for (const t of this.tokens.values()) if (t.autoLaunched && !keep.has(t.address)) (by[t.launchPlat || 'flap'] ||= []).push(t);
     for (const list of Object.values(by)) {
       list.sort((a, b) => (b.migratedAt || b.createdAt || 0) - (a.migratedAt || a.createdAt || 0));
@@ -415,9 +421,9 @@ export class LiveMarket extends EventEmitter {
         const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
         // 2026-10-29：Flap 门槛盘 970 多个把 1000 个名额占满后，新来的 gang 盘自己成了唯一可淘汰的，刚加进来就被踢掉，_evictFloor 还被设成「现在」，
         // 之后接口里的 gang 盘全被拒收（「新创建」里没有 gang 盘）。改成：正在加的这个币不淘汰；6 小时以上没人买过（raised = 0）的 Flap 门槛内盘可以淘汰
-        const now = Date.now(), deadFlap = (t) => t.source === 'flap-nft' && t.stage === 'curve' && t._stOk && !(t.raised > 0) && now - (t.createdAt || now) > 6 * 3600_000;
-        const old = [...this.tokens.values()].filter((t) => t.address !== k && !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && (t.source !== 'flap-nft' || deadFlap(t)) && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
-        if (old) { this.tokens.delete(old.address); if (old.source !== 'flap-nft') this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）；淘汰没人买的 Flap 盘不算
+        // 一天里盘子过多：不分来源，去掉创建最早的那个（正在加的这个币除外），只展示新的（jak 2026-10-29）
+        const old = [...this.tokens.values()].filter((t) => t.address !== k && !t.pinned && !keep.has(t.address)).sort((a, b) => a.createdAt - b.createdAt)[0];
+        if (old) { this.tokens.delete(old.address); this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）
       }
     }
     return this.tokens.get(k);
@@ -547,6 +553,7 @@ export class LiveMarket extends EventEmitter {
   async upsertFlapNft(g, { restore } = {}) {
     const k = g.token, existed = this.tokens.has(k);
     if (existed && this.get(k).source !== 'flap-nft' && this.get(k).source !== 'flap-plain') return;
+    if (restore && !existed && this.expired(g.at || g.seenAt, k)) return;   // 重启恢复：超过一天的老盘不进战壕（也不读链）
    // flap-plain = 战壕里的 Flap 普通盘，打开 / 下单时升级成这里的普通盘
     // 先同步登记进列表（门槛 + 来源），名字 / 状态 / NFT 信息随后补上：搜索、钱包 2 收到订单时不用等这些读取
     const t = this.base(k);
