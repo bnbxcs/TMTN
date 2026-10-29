@@ -569,8 +569,7 @@ export class LiveMarket extends EventEmitter {
     Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
       nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, plain: !!g.plain, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
     if (g.auto) t.autoLaunched = true;
-    // 重启恢复的老币（lite）：只读一次链上状态（价格 / 进度 → 列表里的市值），名字 / 图标用登记表里存的；税率、成交历史、外盘价
-    // 等点进去（refresh）或轮询（flapNftTick / dexSweep）再读。以前每个币启动时读 name / symbol / metaURI / 税率 / 历史全套，其中名字 956/957 个早就存着了
+    // 重启恢复的老币（lite）：名字 / 图标用登记表里存的（956/957 个早就存着，以前每次重启都重读 name / symbol / metaURI），其余照常读、但走 restoreGate 排队
     const lite = !!restore && !!(g.meta?.name && g.meta?.symbol);
     if (lite) this.loadMeta(t, ipfsUrl(g.meta.uri));
     const run = async () => {
@@ -578,8 +577,9 @@ export class LiveMarket extends EventEmitter {
       if (!g.at && g.block) { try { g.at = (await this.provider.getBlock(g.block)).timestamp * 1000; this.flapNft.save(); } catch { /* 用发现时间 */ } }
       Object.assign(t, { createdAt: g.at || g.seenAt });
       if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
-      if (st) { await this.applyFlapNftState(t, st); t._stOk = true; }   // 读到过链上状态（raised 可信）才允许按「没人买」淘汰
-      if (lite) return;
+      if (st) { await this.applyFlapNftState(t, st); t._stOk = true; }   // 读到过链上状态
+      // 重启恢复的老币也预载成交历史（K 线）/ 税率 / 外盘价：战壕按列限时后只剩一两百个盘，排着队（restoreGate + history 自己的队列）读完全扛得住，
+      // 点开就能立刻看到 K 线和成交（jak 2026-10-29）；只有名字 / 图标不再重读（登记表里存着）
       (g.auto ? Promise.resolve() : this.flapNftHistory(t)).then(() => {   // 自动收录的已开盘普通盘不补内盘成交（太多），只读外盘价
         if (t.stage === 'dex') return this.dexRefresh(t).then(() => this.emit('detail', t.address)); }).catch(() => {});   // 内盘成交从创建起补齐；已迁移的顺便读一次外盘价，列表里市值不再是「—」
       await this.flapNftTax(t).catch(() => {});
